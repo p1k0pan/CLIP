@@ -29,18 +29,7 @@ def evaluation(model, data_loader, device, validate=False):
 
     
     print('Computing features for evaluation...')
-    start_time = time.time()  
 
-    # texts = data_loader.dataset.text   
-    # num_text = len(texts)
-    # text_bs = 256
-    # text_embeds = []  
-    # for i in range(0, num_text, text_bs):
-    #     text = texts[i: min(num_text, i+text_bs)]
-    #     text_input = clip.tokenize(text, padding='max_length', truncation=True, max_length=35, return_tensors="pt").to(device) 
-    #     text_output = model.encode_text(text_input)
-    #     text_embed = F.normalize(model.text_proj(text_output.last_hidden_state[:,0,:]))
-    #     text_embeds.append(text_embed)   
     text_feat = data_loader.dataset.text_feat
     image_feat = data_loader.dataset.image_feat
     text_embeds = torch.cat(text_feat,dim=0).to(device)
@@ -61,16 +50,16 @@ def evaluation(model, data_loader, device, validate=False):
         topk_sim, topk_idx = sims.topk(k=256, dim=0)
         score_matrix_t2i[int(i), topk_idx.type(torch.int64)]=topk_sim
 
-    if validate:
-        # cur_loss = (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
-        img2text = data_loader.dataset.img2txt
-        text2img = data_loader.dataset.txt2img
-        img2text_values =list(img2text.values())
-        img2text_gt = torch.tensor(img2text_values, dtype=torch.int64)  # Adjust dtype as needed
-        text2img_values = list(text2img.values())
-        text2img_gt = torch.tensor(text2img_values, dtype=torch.int64)  # Adjust dtype as needed
-        print('img2text',img2text_gt.shape)
-        print('text2img',text2img_gt.shape)
+    # if validate:
+    #     # cur_loss = (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
+    #     img2text = data_loader.dataset.img2txt
+    #     text2img = data_loader.dataset.txt2img
+    #     img2text_values =list(img2text.values())
+    #     img2text_gt = torch.tensor(img2text_values, dtype=torch.int64)  # Adjust dtype as needed
+    #     text2img_values = list(text2img.values())
+    #     text2img_gt = torch.tensor(text2img_values, dtype=torch.int64)  # Adjust dtype as needed
+    #     print('img2text',img2text_gt.shape)
+    #     print('text2img',text2img_gt.shape)
 
  
     
@@ -235,10 +224,10 @@ def main(eval=False,pretrained=False):
         c_model.convert_weights(model) # Actually this line is unnecessary since clip by default already on float16
 
     loss_func = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=1e-5,betas=(0.9,0.98),eps=1e-6,weight_decay=1e-5) #Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
-    # optimizer = optim.Adam(model.parameters(), lr=1e-6,betas=(0.9,0.98),eps=1e-6,weight_decay=0.001) #Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
-    # optimizer = optim.Adam(model.parameters(), lr=5e-5,betas=(0.9,0.98),eps=1e-6,weight_decay=0.2) #Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
+    # optimizer = optim.Adam(model.parameters(), lr=1e-5,betas=(0.9,0.98),eps=1e-6,weight_decay=1e-5) 
+    optimizer = optim.Adam(model.parameters(), lr=1e-6,betas=(0.9,0.98),eps=1e-6,weight_decay=0.001) #Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
+    # optimizer = optim.Adam(model.parameters(), lr=5e-5,betas=(0.9,0.98),eps=1e-6,weight_decay=0.2) 
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1) # cosine_lr_schedule?
 
     if eval:
         score_test_i2t, score_test_t2i=evaluation(model, test_dataloader, device, True)
@@ -252,7 +241,7 @@ def main(eval=False,pretrained=False):
                         'optimizer': optimizer.state_dict(),
                         'epoch': EPOCH,
                     }
-        torch.save(save_obj, 'outputs/finetuned_coco_no_shuffle.pt')  
+        torch.save(save_obj, 'outputs/finetuned_coco_no_shuffle_lr1e-6.pt')  
         score_test_i2t, score_test_t2i=evaluation(model, test_dataloader, device)
         test_result = itm_eval(score_test_i2t, score_test_t2i, test_dataloader.dataset.txt2img, test_dataloader.dataset.img2txt) 
         print(test_result)
@@ -270,5 +259,14 @@ if __name__ == "__main__":
     config={
     "epochs": 1,
     })
-    main(eval=True, pretrained=False)
+    main(eval=False, pretrained=False)
+    # model, preprocess = clip.load("ViT-B/32",device="cuda:3",jit=False) #Must set jit=False for training
+    # checkpoint = torch.load("outputs/finetuned_coco_no_shuffle.pt")
+    # model.load_state_dict(checkpoint['model'])
+    # print(model.state_dict().keys())
+    # with open("outputs/ori_model_structure.txt",'w') as f:
+    #     f.write(str(model.state_dict))
+        # for key,value in model.state_dict():
+        #     f.write()
+    
     
