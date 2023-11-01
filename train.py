@@ -53,20 +53,36 @@ def evaluation(model, data_loader, device, validate=False):
         topk_sim, topk_idx = sims.topk(k=256, dim=0)
         score_matrix_t2i[int(i), topk_idx.type(torch.int64)]=topk_sim
 
+    result = itm_eval( score_matrix_i2t.cpu().numpy(), score_matrix_t2i.cpu().numpy(), data_loader.dataset.img2txt, data_loader.dataset.txt2img)
+    
+
     # if validate:
-    #     # cur_loss = (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
-    #     img2text = data_loader.dataset.img2txt
-    #     text2img = data_loader.dataset.txt2img
-    #     img2text_values =list(img2text.values())
-    #     img2text_gt = torch.tensor(img2text_values, dtype=torch.int64)  # Adjust dtype as needed
-    #     text2img_values = list(text2img.values())
-    #     text2img_gt = torch.tensor(text2img_values, dtype=torch.int64)  # Adjust dtype as needed
-    #     print('img2text',img2text_gt.shape)
-    #     print('text2img',text2img_gt.shape)
+        # metric_logger = utils.MetricLogger(delimiter="  ")
+        # metric_logger.add_meter('eval_loss', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+        # header = 'Evaluation loss'
+        # print_freq = 50
+        # step=0
+        # for i,(images, index) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+        #     step+=1
+        #     text_ids= data_loader.dataset.img2txt[index]
+        #     captions = [data_loader.dataset.text_feat[i] for i in text_ids]
+        #     for caption in captions:
+        #         images= images.to(device)
+        #         texts = caption.to(device)
+        #         reshape_caption = texts.squeeze(dim=1) # [batch_size*num_texts, 1, embeddings] -> [batch_size*num_texts, embeddings]
+        #         ground_truth = torch.arange(len(images),dtype=torch.long,device=device)
+        # # cur_loss = (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
+        # img2text = data_loader.dataset.img2txt
+        # text2img = data_loader.dataset.txt2img
+        # img2text_values =list(img2text.values())
+        # img2text_gt = torch.tensor(img2text_values, dtype=torch.int64)  # Adjust dtype as needed
+        # text2img_values = list(text2img.values())
+        # text2img_gt = torch.tensor(text2img_values, dtype=torch.int64)  # Adjust dtype as needed
+        # print('img2text',img2text_gt.shape)
+        # print('text2img',text2img_gt.shape)
 
  
-    
-    return score_matrix_i2t.cpu().numpy(), score_matrix_t2i.cpu().numpy()
+    return result
     
 
 @torch.no_grad()
@@ -258,8 +274,8 @@ def main(eval=False,pretrained=False,dataset='coco'):
     scaler = GradScaler()
 
     if eval:
-        score_test_i2t, score_test_t2i=evaluation(model, test_dataloader, device, True)
-        test_result = itm_eval(score_test_i2t, score_test_t2i, test_dataloader.dataset.txt2img, test_dataloader.dataset.img2txt) 
+        eval_result=evaluation(model, test_dataloader, device, False)
+        # test_result = itm_eval(score_test_i2t, score_test_t2i, test_dataloader.dataset.txt2img, test_dataloader.dataset.img2txt) 
         print(test_result)
     else:
         train(train_dataloader, model=model, optimizer=optimizer, loss_func=loss_func, device=device, epoch=0, dataset_len=dataset_len, scaler=scaler)
