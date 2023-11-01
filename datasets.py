@@ -4,6 +4,8 @@ import json
 import re
 import os
 from clip import clip
+import pandas as pd
+from ast import literal_eval
 
 def pre_caption(caption,max_words=50):
     caption = re.sub(
@@ -101,8 +103,45 @@ class clip_coco_retrieval_eval(Dataset):
     
     def __getitem__(self, index):    
         
-        image_path = os.path.join(self.image_root, self.annotation[index]['image'])        
-        image = Image.open(image_path).convert('RGB')    
-        image = self.preprocess(image)  
+        return self.image_feat[index], index
 
-        return image, index
+class flickr_dataset(Dataset):
+    def __init__(self, image_root, ann_root, preprocess, max_words=30):
+
+        self.image_root = image_root
+        self.preprocess = preprocess
+        self.annotation = pd.read_csv(ann_root)
+        self.annotation['img_id'] = self.annotation['img_id'].astype(int)
+
+        self.txt2img = {}
+        self.img2txt = {}
+        self.text_feat = []
+        self.image_feat = []
+
+        txt_id = 0
+        for index, row in self.annotation.iterrows():
+            # image
+            captions = literal_eval(row['raw'])
+            # sentids = literal_eval(row['sentids'])
+            # self.img2txt[row['img_id']]=sentids
+            self.img2txt[index] = []
+            img_path = os.path.join(self.image_root,row['filename'])      
+            img = self.preprocess(Image.open(img_path).convert('RGB'))
+            self.image_feat.append(img)
+            # caption
+            # sent_dict = {key: row['img_id'] for key in sentids}
+            # self.txt2img.update(sent_dict)
+            for caption in captions:
+                text = pre_caption(caption,max_words)
+                txt = clip.tokenize(text)
+                self.text_feat.append(txt)
+                self.img2txt[index].append(txt_id)
+                self.txt2img[txt_id] = index
+                txt_id += 1
+
+    def __len__(self):
+        return len(self.annotation)
+    
+    def __getitem__(self, index):    
+        
+        return self.image_feat[index], self.text_feat[index]
