@@ -9,9 +9,10 @@ from torch.utils.data import DataLoader, Dataset
 import torch.nn.functional as F
 from PIL import Image
 # from dataset import CLIP_COCO_dataset
-BATCH_SIZE = 256
+BATCH_SIZE = 64
 EPOCH = 20
-LR=1e-6
+LR=1e-5
+device = "cuda:0" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
 import json
 import re
 from torchvision import transforms
@@ -40,20 +41,21 @@ def evaluation(model, data_loader, device, validate=False):
     
     logits_per_image, logits_per_text = model(image_embeds, text_embeds)
 
-    sims_matrix = logits_per_image
+    sims_matrix = logits_per_image.cpu()
+    return sims_matrix.numpy(), sims_matrix.T.numpy()
 
-    score_matrix_i2t = torch.full((len(data_loader.dataset.image_feat),len(data_loader.dataset.text_feat)),-100.0, dtype=torch.float16).to(device)
-    for i,sims in enumerate(sims_matrix): 
-        topk_sim, topk_idx = sims.topk(k=256, dim=0)
-        score_matrix_i2t[int(i), topk_idx.type(torch.int64)]=topk_sim
+    # score_matrix_i2t = torch.full((len(data_loader.dataset.image_feat),len(data_loader.dataset.text_feat)),-100.0, dtype=torch.float16).cpu()
+    # for i,sims in enumerate(sims_matrix): 
+    #     topk_sim, topk_idx = sims.topk(k=256, dim=0)
+    #     score_matrix_i2t[int(i), topk_idx.type(torch.int64)]=topk_sim
 
-    sims_matrix_t = logits_per_text
-    score_matrix_t2i = torch.full((len(data_loader.dataset.text_feat),len(data_loader.dataset.image_feat)),-100.0, dtype=torch.float16).to(device)
-    for i,sims in enumerate(sims_matrix_t): 
-        topk_sim, topk_idx = sims.topk(k=256, dim=0)
-        score_matrix_t2i[int(i), topk_idx.type(torch.int64)]=topk_sim
+    # sims_matrix_t = logits_per_text
+    # score_matrix_t2i = torch.full((len(data_loader.dataset.text_feat),len(data_loader.dataset.image_feat)),-100.0, dtype=torch.float16).cpu()
+    # for i,sims in enumerate(sims_matrix_t): 
+    #     topk_sim, topk_idx = sims.topk(k=256, dim=0)
+    #     score_matrix_t2i[int(i), topk_idx.type(torch.int64)]=topk_sim
 
-    result = itm_eval( score_matrix_i2t.cpu().numpy(), score_matrix_t2i.cpu().numpy(), data_loader.dataset.img2txt, data_loader.dataset.txt2img)
+    # return score_matrix_i2t.numpy(), score_matrix_t2i.numpy()
     
 
     # if validate:
@@ -82,7 +84,22 @@ def evaluation(model, data_loader, device, validate=False):
         # print('text2img',text2img_gt.shape)
 
  
-    return result
+@torch.no_grad()
+def small_batch_evaluate(model, data_loader, device):
+    model.eval()
+
+    print('Computing features for small batch evaluation...')
+    img2txt = data_loader.dataset.img2txt
+    metric_logger = utils.MetricLogger(delimiter="  ")
+    metric_logger.add_meter('eval_loss', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    header = 'Evaluation loss'
+    print_freq = 50
+    step=0
+    for i,(images, index) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+            step+=1
+            text_ids= img2txt[index]
+            captions = [data_loader.dataset.text_feat[i] for i in text_ids]
+
     
 
 @torch.no_grad()
@@ -133,15 +150,18 @@ def itm_eval(scores_i2t, scores_t2i, txt2img, img2txt):
     return eval_result
 
 # https://github.com/openai/CLIP/issues/57
-def convert_models_to_fp32(model): 
+def convert_models_to_fp32(model,eval): 
     for p in model.parameters(): 
         p.data = p.data.float() 
-        p.grad.data = p.grad.data.float() 
+        if not eval:
+            p.grad.data = p.grad.data.float() 
 
-def train(train_dataloader, model, optimizer, loss_func, device, epoch, dataset_len, scheduler=None, scaler = None):
+def train(train_dataloader,val_dataloader, model, optimizer, loss_func, device, epoch, dataset_len, 
+          scheduler=None, scaler = None, shuffled=False):
     model.train()
     loss_img = loss_func
     loss_txt = loss_func
+    best = 0
     print("start training")
     start_time = time.time()    
     for epoch in range(EPOCH):
@@ -162,28 +182,56 @@ def train(train_dataloader, model, optimizer, loss_func, device, epoch, dataset_
             optimizer.zero_grad()
             step+=1
 
-            # when they have different length -> captions contain shuffled texts
-            if len(images) != len(captions):
+            # caption dim=1 is not 1 -> captions contain shuffled texts
+            if captions.size(1) != 1:
                 # images: torch.Size([128, 3, 224, 224]) captions: torch.Size([128, 4, 77])
-                reshape_caption = captions.view(-1, 1, captions.size(-1)) # [batch_size, num_texts=4, embeddings] -> [batch_size*num_texts, 1, embeddings]
-                ground_truth = torch.arange(0, len(reshape_caption), 4,dtype=torch.long,device=device) # every 4th caption is the ground truth
+                split_size = 1
+                # split in tuple of 4, each size is captions: torch.Size([128, 1, 77])
+                split_tensors = torch.split(captions, split_size, dim=1)
+
+                positvie_caption = split_tensors[0].squeeze(dim=1)
+                negative_captions = [split_tensors[idx].squeeze(dim=1) for idx in range(1, 4)]
+                images = images.to(device)
+                positive_texts = positvie_caption.to(device)
+                with autocast():
+
+                    # text loss
+                    logits_per_image, positive_logits_per_text = model(images, positive_texts)
+                    positive_ground_truth = torch.eye(images.size(0),device=device)
+                    # positive_ground_truth = torch.arange(len(images),dtype=torch.long,device=device)
+                    positive_txt_loss =loss_txt(positive_logits_per_text,positive_ground_truth)
+                    negative_loss = 0
+                    for negative_caption in negative_captions:
+                        negative_texts = negative_caption.to(device)
+                        logits_per_image, negative_logits_per_text = model(images, negative_texts)
+                        negative_ground_truth = torch.zeros_like(logits_per_image,device=device)
+                        negative_loss += loss_txt(negative_logits_per_text,negative_ground_truth)
+
+                    txt_loss = (positive_txt_loss + negative_loss)/4
+
+                    # image loss
+                    img_loss = loss_img(logits_per_image,positive_ground_truth)
+                    cur_loss = (txt_loss + img_loss)/2
+                    total_loss += cur_loss.item()
+
             else:
                 # no shuffled texts
                 # images: torch.Size([128, 3, 224, 224]) captions: torch.Size([128, 1, 77])
                 reshape_caption = captions
-                ground_truth = torch.arange(len(images),dtype=torch.long,device=device)
+                # ground_truth = torch.arange(len(images),dtype=torch.long,device=device)
+                ground_truth = torch.eye(images.size(0),device=device)
+                reshape_caption = reshape_caption.squeeze(dim=1) # [batch_size*num_texts, 1, embeddings] -> [batch_size*num_texts, embeddings]
 
-            reshape_caption = reshape_caption.squeeze(dim=1) # [batch_size*num_texts, 1, embeddings] -> [batch_size*num_texts, embeddings]
-            images= images.to(device)
-            texts = reshape_caption.to(device)
-            
-            # no shuffle shape=(batch_size, batch_size)
-            with autocast():
-                logits_per_image, logits_per_text = model(images, texts)
+                images= images.to(device)
+                texts = reshape_caption.to(device)
+                
+                # no shuffle shape=(batch_size, batch_size)
+                with autocast():
+                    logits_per_image, logits_per_text = model(images, texts)
 
 
-                cur_loss = (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
-                total_loss += cur_loss.item()
+                    cur_loss = (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
+                    total_loss += cur_loss.item()
 
             # cur_loss.backward()
             scaler.scale(cur_loss).backward()
@@ -192,7 +240,7 @@ def train(train_dataloader, model, optimizer, loss_func, device, epoch, dataset_
                 # optimizer.step()
                 scaler.step(optimizer)
             else : 
-                convert_models_to_fp32(model)
+                convert_models_to_fp32(model, False)
                 # optimizer.step()
                 scaler.step(optimizer)
                 c_model.convert_weights(model)
@@ -200,20 +248,39 @@ def train(train_dataloader, model, optimizer, loss_func, device, epoch, dataset_
 
             metric_logger.update(loss_ita=cur_loss.item())
             metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-            wandb.log({'loss_ita': total_loss.item(), 'lr': optimizer.param_groups[0]["lr"]})
+            wandb.log({'loss_ita': cur_loss.item(), 'lr': optimizer.param_groups[0]["lr"]})
         
         epoch_loss = total_loss / step
-        metric_logger.update(loss_total=epoch_loss.item())
-        wandb.log({'loss_total': epoch_loss.item()})
+        metric_logger.update(loss_total=epoch_loss)
+        wandb.log({'loss_total': epoch_loss})
         print("Averaged stats:", metric_logger.global_avg())     
+
+        #eval and saved best trained
+
+        val_result=evaluation(model, val_dataloader, device, False)
+        score_test_i2t, score_test_t2i=evaluation(model, val_dataloader, device, False)
+        val_result = itm_eval(score_test_i2t, score_test_t2i, val_dataloader.dataset.txt2img, val_dataloader.dataset.img2txt) 
+        if val_result['r_mean']>best:
+            save_obj = {
+                'model': model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'epoch': epoch,
+            }
+            if shuffled:
+                torch.save(save_obj, os.path.join('outputs', 'shuffled_checkpoint_best_r'+str(val_result['r_mean'])+'_lr'+
+                                              str(optimizer.param_groups[0]["lr"])+'_epoch'+str(epoch)+'.pth'))  
+            else:
+                torch.save(save_obj, os.path.join('outputs', 'original_checkpoint_best_r'+str(val_result['r_mean'])+'_lr'+
+                                              str(optimizer.param_groups[0]["lr"])+'_epoch'+str(epoch)+'.pth'))  
+
+            best = val_result['r_mean']        
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str)) 
 
-def main(eval=False,pretrained=False,dataset='coco'):
+def main(eval=False,pretrained=False,dataset='coco', shuffled=False):
     
-    device = "cuda:3" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
     if pretrained:
         # model, preprocess = clip.load("ViT-L/14",device=device,jit=False) #Must set jit=False for training
         model, preprocess = clip.load("ViT-B/32",device=device,jit=False) #Must set jit=False for training
@@ -227,19 +294,32 @@ def main(eval=False,pretrained=False,dataset='coco'):
         model.load_state_dict(checkpoint['model'])
     else:
         model, preprocess = clip.load("ViT-B/32",device=device,jit=False) #Must set jit=False for training
+
+    print("load dataset")
     if dataset=='coco':
         train_ann_root = '/ltstorage/home/2pan/dataset/COCO/coco_karpathy_train.json'
         test_ann_root = '/ltstorage/home/2pan/dataset/COCO/coco_karpathy_test.json'
         val_ann_root = '/ltstorage/home/2pan/dataset/COCO/coco_karpathy_val.json'
         image_root = '/ltstorage/home/2pan/dataset/COCO/'
         # create dataloader
-        train_dataset = clip_coco_retrieval_train(image_root, train_ann_root, preprocess, shuffle_func_list=None)
-        dataset_len = len(train_dataset)
-        train_dataloader = DataLoader(train_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=True) #Define your own dataloader
         test_dataset = clip_coco_retrieval_eval(image_root, test_ann_root, preprocess)
         test_dataloader = DataLoader(test_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
         val_dataset = clip_coco_retrieval_eval(image_root, val_ann_root, preprocess)
         val_dataloader = DataLoader(val_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
+        if not eval:
+            # destroy the text
+            if shuffled:
+                text_desc = Text_Des()
+                perturb_functions = [text_desc.shuffle_nouns_and_verb_adj, text_desc.shuffle_allbut_nouns_verb_adj,
+                                    text_desc.shuffle_all_words]
+                train_dataset = clip_coco_retrieval_train(image_root, train_ann_root, preprocess, shuffle_func_list=perturb_functions)
+                dataset_len = len(train_dataset)
+                train_dataloader = DataLoader(train_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=True) #Define your own dataloader
+            else:
+                train_dataset = clip_coco_retrieval_train(image_root, train_ann_root, preprocess, shuffle_func_list=None)
+                dataset_len = len(train_dataset)
+                train_dataloader = DataLoader(train_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=True) #Define your own dataloader
+
 
     elif dataset == 'flickr':
         # train_ann_root = '/ltstorage/home/2pan/dataset/COCO/coco_karpathy_train.json'
@@ -253,19 +333,13 @@ def main(eval=False,pretrained=False,dataset='coco'):
         test_dataloader = DataLoader(all_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=True) #Define your own dataloader
 
 
-    # destroy the text
-    text_desc = Text_Des()
-    perturb_functions = [text_desc.shuffle_nouns_and_verb_adj, text_desc.shuffle_allbut_nouns_verb_adj,
-                        text_desc.shuffle_all_words]
-
-
-
     if device == "cpu":
         model.float()
     else :
         c_model.convert_weights(model) # Actually this line is unnecessary since clip by default already on float16
 
     loss_func = nn.CrossEntropyLoss()
+    # loss_func = nn.BCEWithLogitsLoss()
     # optimizer = optim.Adam(model.parameters(), lr=1e-5,betas=(0.9,0.98),eps=1e-6,weight_decay=1e-5) 
     optimizer = optim.Adam(model.parameters(), lr=LR,betas=(0.9,0.98),eps=1e-6,weight_decay=0.001) #Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
     # optimizer = optim.Adam(model.parameters(), lr=5e-5,betas=(0.9,0.98),eps=1e-6,weight_decay=0.2) 
@@ -274,36 +348,45 @@ def main(eval=False,pretrained=False,dataset='coco'):
     scaler = GradScaler()
 
     if eval:
-        eval_result=evaluation(model, test_dataloader, device, False)
-        # test_result = itm_eval(score_test_i2t, score_test_t2i, test_dataloader.dataset.txt2img, test_dataloader.dataset.img2txt) 
+        # eval_result=evaluation(model, val_dataloader, device, False)
+        # eval_result=evaluation(model, test_dataloader, device, False)
+        # convert_models_to_fp32(model,eval)
+        score_test_i2t, score_test_t2i=evaluation(model, val_dataloader, device, False)
+        test_result = itm_eval(score_test_i2t, score_test_t2i, val_dataloader.dataset.txt2img, val_dataloader.dataset.img2txt) 
         print(test_result)
     else:
-        train(train_dataloader, model=model, optimizer=optimizer, loss_func=loss_func, device=device, epoch=0, dataset_len=dataset_len, scaler=scaler)
+        wandb.init(
+        # set the wandb project where this run will be logged
+        project="finetune_clip",
+        
+        # track hyperparameters and run metadata
+        config={
+        "epochs": 1,
+        })
+        train(train_dataloader, val_dataloader, model=model, optimizer=optimizer, loss_func=loss_func, device=device, epoch=0, 
+              dataset_len=dataset_len, scaler=scaler, shuffled = shuffled)
 
-        save_obj = {
-                        'model': model.state_dict(),
-                        'optimizer': optimizer.state_dict(),
-                        'epoch': EPOCH,
-                    }
-        torch.save(save_obj, 'outputs/finetuned_coco_no_shuffle_lr1e-6.pt')  
         score_test_i2t, score_test_t2i=evaluation(model, test_dataloader, device)
         test_result = itm_eval(score_test_i2t, score_test_t2i, test_dataloader.dataset.txt2img, test_dataloader.dataset.img2txt) 
-        print(test_result)
+        print("test",test_result)
         score_val_i2t, score_val_t2i=evaluation(model, val_dataloader, device)
         val_result = itm_eval(score_val_i2t, score_val_t2i, val_dataloader.dataset.txt2img, val_dataloader.dataset.img2txt) 
-        print(val_result)
+        print("val",val_result)
+        save_obj = {
+            'model': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'epoch': EPOCH,
+        }
+        if shuffled:
+            torch.save(save_obj, os.path.join('outputs', 'shuffled_checkpoint_best_r'+str(test_result['r_mean'])+'_lr'+
+                                            str(optimizer.param_groups[0]["lr"])+'_epoch'+str(EPOCH)+'.pth'))  
+        else:
+            torch.save(save_obj, os.path.join('outputs', 'original_checkpoint_best_r'+str(test_result['r_mean'])+'_lr'+
+                                            str(optimizer.param_groups[0]["lr"])+'_epoch'+str(EPOCH)+'.pth')) 
 
 
 if __name__ == "__main__":
-    # wandb.init(
-    # # set the wandb project where this run will be logged
-    # project="finetune_clip",
-    
-    # # track hyperparameters and run metadata
-    # config={
-    # "epochs": 1,
-    # })
-    main(eval=True, pretrained=True, dataset='flickr')
+    main(eval=True, dataset='coco', shuffled=False)
     # model, preprocess = clip.load("ViT-B/32",device="cuda:3",jit=False) #Must set jit=False for training
     # checkpoint = torch.load("outputs/finetuned_coco_no_shuffle.pt")
     # model.load_state_dict(checkpoint['model'])
