@@ -69,7 +69,7 @@ class clip_coco_retrieval_train(Dataset):
 
 class clip_coco_retrieval_eval(Dataset):
     
-    def __init__(self, image_root, ann_root, preprocess, max_words=30):
+    def __init__(self, image_root, ann_root, preprocess, validate=False, max_words=30 ):
 
         self.image_root = image_root
         self.preprocess = preprocess
@@ -97,12 +97,14 @@ class clip_coco_retrieval_eval(Dataset):
                 self.img2txt[img_id].append(txt_id)
                 self.txt2img[txt_id] = img_id
                 txt_id += 1
+                if validate:
+                    break
 
     def __len__(self):
         return len(self.annotation)
     
     def __getitem__(self, index):    
-        return self.image_feat[index], index
+        return self.image_feat[index], self.text_feat[index]
 
 class flickr_dataset(Dataset):
     def __init__(self, image_root, ann_root, preprocess, max_words=30):
