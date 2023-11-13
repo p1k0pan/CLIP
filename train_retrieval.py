@@ -1,3 +1,4 @@
+from attr import attrib
 import torch
 from torch import nn, optim
 import argparse
@@ -13,7 +14,7 @@ BATCH_SIZE = 128
 EPOCH = 20
 LR=1e-6
 WARMUP = 3000
-device = "cuda:3" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
+device = "cuda:1" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
 import json
 import re
 from torchvision import transforms
@@ -21,13 +22,150 @@ from torchvision.transforms.functional import InterpolationMode
 import numpy as np
 
 import wandb
-import time
-import datetime
 from shuffle_func import Text_Des
 from datasets import clip_coco_retrieval_train, clip_coco_retrieval_eval, flickr_dataset
-from utils import MetricLogger, cosine_lr_schedule
 from scheduler import cosine_lr
 from torch.cuda.amp import GradScaler, autocast
+from collections import Counter
+import time, datetime
+from utils import MetricLogger, cosine_lr_schedule
+
+# https://github.com/openai/CLIP/issues/57
+def convert_models_to_fp32(model,eval): 
+    for p in model.parameters(): 
+        p.data = p.data.float() 
+        if not eval:
+            p.grad.data = p.grad.data.float() 
+
+def train(train_dataloader,val_dataloader, test_dataloader, model, optimizer, loss_func, device, total_epoch, init_lr, dataset_len, 
+          scheduler=None, scaler = None, shuffled=False, name=""):
+    model.train()
+    loss_img = loss_func
+    loss_txt = loss_func
+    best = 0
+    print("start training")
+    start_time = time.time()    
+    # total_step=0
+    for epoch in range(total_epoch):
+        cosine_lr_schedule(optimizer, epoch, total_epoch, init_lr, 0 )
+        # scheduler.step()
+        total_loss = 0
+        metric_logger = utils.MetricLogger(delimiter="  ")
+        metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+        metric_logger.add_meter('loss_ita', utils.SmoothedValue(window_size=1, fmt='{value:.4f}'))
+        metric_logger.add_meter('loss_total', utils.SmoothedValue(window_size=1, fmt='{value:.4f}'))
+
+        # add your own code to track the training progress.
+        header = 'Train Epoch: [{}]'.format(epoch)
+        print_freq = 50
+        step = 0
+        for i,(images, captions) in enumerate(metric_logger.log_every(train_dataloader, print_freq, header)):
+        # for batch in train_dataloader :
+            optimizer.zero_grad()
+            step+=1
+            # total_step +=1
+            # scheduler(total_step)
+
+            # caption dim=1 is not 1 -> captions contain shuffled texts
+            if captions.size(1) != 1:
+                # images: torch.Size([128, 3, 224, 224]) captions: torch.Size([128, 4, 77])
+                split_size = 1
+                # split in tuple of 4, each size is captions: torch.Size([128, 1, 77])
+                split_tensors = torch.split(captions, split_size, dim=1)
+
+                positvie_caption = split_tensors[0].squeeze(dim=1)
+                negative_captions = [split_tensors[idx].squeeze(dim=1) for idx in range(1, 4)]
+                images = images.to(device)
+                positive_texts = positvie_caption.to(device)
+                with autocast():
+
+                    # logits
+                    positive_logits_per_image, positive_logits_per_text = model(images, positive_texts)
+                    # positive ground truth
+                    positive_ground_truth = torch.eye(images.size(0),device=device)
+                    # positive text loss
+                    positive_txt_loss =loss_txt(positive_logits_per_text,positive_ground_truth)
+                    # positive image loss
+                    positive_img_loss = loss_img(positive_logits_per_image,positive_ground_truth)
+                    negative_txt_loss = 0
+                    negative_img_loss = 0
+                    for negative_caption in negative_captions:
+                        negative_texts = negative_caption.to(device)
+                        negative_logits_per_image, negative_logits_per_text = model(images, negative_texts)
+                        negative_ground_truth = torch.zeros_like(negative_logits_per_image,device=device)
+                        # negative_txt_loss += loss_txt(negative_logits_per_text,negative_ground_truth)
+                        negative_img_loss += loss_img(negative_logits_per_image, negative_ground_truth)
+
+                    txt_loss = (positive_txt_loss + (negative_txt_loss/3)) /2
+                    img_loss = (positive_img_loss + (negative_img_loss/3)) /2
+
+                    cur_loss = (txt_loss + img_loss)/2
+                    total_loss += cur_loss.item()
+
+            else:
+                # no shuffled texts
+                # images: torch.Size([128, 3, 224, 224]) captions: torch.Size([128, 1, 77])
+                reshape_caption = captions
+                # ground_truth = torch.arange(len(images),dtype=torch.long,device=device)
+                ground_truth = torch.eye(images.size(0),device=device)
+                reshape_caption = reshape_caption.squeeze(dim=1) # [batch_size*num_texts, 1, embeddings] -> [batch_size*num_texts, embeddings]
+
+                images= images.to(device)
+                texts = reshape_caption.to(device)
+                
+                # no shuffle shape=(batch_size, batch_size)
+                with autocast():
+                    logits_per_image, logits_per_text = model(images, texts)
+
+
+                    cur_loss = (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
+                    total_loss += cur_loss.item()
+
+            # cur_loss.backward()
+            scaler.scale(cur_loss).backward()
+
+            if device == "cpu":
+                # optimizer.step()
+                scaler.step(optimizer)
+            else : 
+                convert_models_to_fp32(model, False)
+                # optimizer.step()
+                scaler.step(optimizer)
+                c_model.convert_weights(model)
+            scaler.update()
+
+            metric_logger.update(loss_ita=cur_loss.item())
+            metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+            wandb.log({'loss_ita': cur_loss.item(), 'lr': optimizer.param_groups[0]["lr"]})
+        
+        epoch_loss = total_loss / step
+        metric_logger.update(loss_total=epoch_loss)
+        wandb.log({'loss_total': epoch_loss})
+        print("Averaged stats:", metric_logger.global_avg())     
+
+        #eval and saved best trained
+
+        # _=evaluation(model, val_dataloader, device, True)
+        score_test_i2t, score_test_t2i=evaluation(model, val_dataloader, device, True)
+        val_result = itm_eval(score_test_i2t, score_test_t2i, val_dataloader.dataset.txt2img, val_dataloader.dataset.img2txt) 
+        if val_result['r_mean']>best:
+            save_obj = {
+                'model': model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'epoch': epoch,
+            }
+            if shuffled:
+                filename = '{}shuffled_checkpoint_best_epoch{}.pth'.format(name, epoch)
+                torch.save(save_obj, os.path.join('outputs',filename))  
+            else:
+                filename = '{}original_checkpoint_best_epoch{}.pth'.format(name, epoch)
+                torch.save(save_obj, os.path.join('outputs',filename))  
+
+            best = val_result['r_mean']        
+
+    total_time = time.time() - start_time
+    total_time_str = str(datetime.timedelta(seconds=int(total_time)))
+    print('Training time {}'.format(total_time_str)) 
 
 @torch.no_grad()
 def evaluation(model, data_loader, device, validate=False):
@@ -87,8 +225,6 @@ def evaluation(model, data_loader, device, validate=False):
 
     return sims_matrix.numpy(), sims_matrix.T.numpy()
 
-
-
 @torch.no_grad()
 def itm_eval(scores_i2t, scores_t2i, txt2img, img2txt):
     
@@ -136,140 +272,35 @@ def itm_eval(scores_i2t, scores_t2i, txt2img, img2txt):
                     'r_mean': r_mean}
     return eval_result
 
-# https://github.com/openai/CLIP/issues/57
-def convert_models_to_fp32(model,eval): 
-    for p in model.parameters(): 
-        p.data = p.data.float() 
-        if not eval:
-            p.grad.data = p.grad.data.float() 
+def evaluate_scores(scores, cla_name):
+    if isinstance(scores, tuple):
+        scores_i2t = scores[0]
+        scores_t2i = scores[1].T  # Make it N_ims x N_text
+    else:
+        scores_t2i = scores
+        scores_i2t = scores
 
-def train(train_dataloader,val_dataloader, test_dataloader, model, optimizer, loss_func, device, epoch, dataset_len, 
-          scheduler=None, scaler = None, shuffled=False):
-    model.train()
-    loss_img = loss_func
-    loss_txt = loss_func
-    best = 0
-    print("start training")
-    start_time = time.time()    
-    # total_step=0
-    for epoch in range(EPOCH):
-        cosine_lr_schedule(optimizer, epoch, EPOCH, LR, 0 )
-        # scheduler.step()
-        total_loss = 0
-        metric_logger = utils.MetricLogger(delimiter="  ")
-        metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
-        metric_logger.add_meter('loss_ita', utils.SmoothedValue(window_size=1, fmt='{value:.4f}'))
-        metric_logger.add_meter('loss_total', utils.SmoothedValue(window_size=1, fmt='{value:.4f}'))
+    # preds = np.argmax(np.squeeze(scores_i2t, axis=1), axis=-1)
+    preds = np.argmax()
+    count = dict(Counter(preds))
+    # correct_mask = (preds == 0)
+    result_records = []
 
-        # add your own code to track the training progress.
-        header = 'Train Epoch: [{}]'.format(epoch)
-        print_freq = 50
-        step = 0
-        for i,(images, captions) in enumerate(metric_logger.log_every(train_dataloader, print_freq, header)):
-        # for batch in train_dataloader :
-            optimizer.zero_grad()
-            step+=1
-            # total_step +=1
-            # scheduler(total_step)
+    for ids, pr in count.items():
+        if ids != 0:
+            rela = cla_name[ids - 1]
+        else:
+            rela = "Correct"
+        result_records.append({
+            "Relation": rela,
+            "Accuracy": pr / len(preds),
+            "Count": pr,
+            "Dataset": "Visual Genome Relation"
+        })
+        print(rela,  pr / len(preds))
+    return result_records
 
-            # caption dim=1 is not 1 -> captions contain shuffled texts
-            if captions.size(1) != 1:
-                # images: torch.Size([128, 3, 224, 224]) captions: torch.Size([128, 4, 77])
-                split_size = 1
-                # split in tuple of 4, each size is captions: torch.Size([128, 1, 77])
-                split_tensors = torch.split(captions, split_size, dim=1)
-
-                positvie_caption = split_tensors[0].squeeze(dim=1)
-                negative_captions = [split_tensors[idx].squeeze(dim=1) for idx in range(1, 4)]
-                images = images.to(device)
-                positive_texts = positvie_caption.to(device)
-                with autocast():
-
-                    # text loss
-                    logits_per_image, positive_logits_per_text = model(images, positive_texts)
-                    positive_ground_truth = torch.eye(images.size(0),device=device)
-                    # positive_ground_truth = torch.arange(len(images),dtype=torch.long,device=device)
-                    positive_txt_loss =loss_txt(positive_logits_per_text,positive_ground_truth)
-                    negative_loss = 0
-                    for negative_caption in negative_captions:
-                        negative_texts = negative_caption.to(device)
-                        logits_per_image, negative_logits_per_text = model(images, negative_texts)
-                        negative_ground_truth = torch.zeros_like(logits_per_image,device=device)
-                        negative_loss += loss_txt(negative_logits_per_text,negative_ground_truth)
-
-                    txt_loss = (positive_txt_loss + negative_loss)/4
-
-                    # image loss
-                    img_loss = loss_img(logits_per_image,positive_ground_truth)
-                    cur_loss = (txt_loss + img_loss)/2
-                    total_loss += cur_loss.item()
-
-            else:
-                # no shuffled texts
-                # images: torch.Size([128, 3, 224, 224]) captions: torch.Size([128, 1, 77])
-                reshape_caption = captions
-                # ground_truth = torch.arange(len(images),dtype=torch.long,device=device)
-                ground_truth = torch.eye(images.size(0),device=device)
-                reshape_caption = reshape_caption.squeeze(dim=1) # [batch_size*num_texts, 1, embeddings] -> [batch_size*num_texts, embeddings]
-
-                images= images.to(device)
-                texts = reshape_caption.to(device)
-                
-                # no shuffle shape=(batch_size, batch_size)
-                with autocast():
-                    logits_per_image, logits_per_text = model(images, texts)
-
-
-                    cur_loss = (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
-                    total_loss += cur_loss.item()
-
-            # cur_loss.backward()
-            scaler.scale(cur_loss).backward()
-
-            if device == "cpu":
-                # optimizer.step()
-                scaler.step(optimizer)
-            else : 
-                convert_models_to_fp32(model, False)
-                # optimizer.step()
-                scaler.step(optimizer)
-                c_model.convert_weights(model)
-            scaler.update()
-
-            metric_logger.update(loss_ita=cur_loss.item())
-            metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-            wandb.log({'loss_ita': cur_loss.item(), 'lr': optimizer.param_groups[0]["lr"]})
-        
-        epoch_loss = total_loss / step
-        metric_logger.update(loss_total=epoch_loss)
-        wandb.log({'loss_total': epoch_loss})
-        print("Averaged stats:", metric_logger.global_avg())     
-
-        #eval and saved best trained
-
-        # _=evaluation(model, val_dataloader, device, True)
-        score_test_i2t, score_test_t2i=evaluation(model, val_dataloader, device, True)
-        val_result = itm_eval(score_test_i2t, score_test_t2i, val_dataloader.dataset.txt2img, val_dataloader.dataset.img2txt) 
-        if val_result['r_mean']>best:
-            save_obj = {
-                'model': model.state_dict(),
-                'optimizer': optimizer.state_dict(),
-                'epoch': epoch,
-            }
-            if shuffled:
-                filename = 'shuffled_checkpoint_best_epoch{}.pth'.format( epoch)
-                torch.save(save_obj, os.path.join('outputs',filename))  
-            else:
-                filename = 'original_checkpoint_best_epoch{}.pth'.format(epoch)
-                torch.save(save_obj, os.path.join('outputs',filename))  
-
-            best = val_result['r_mean']        
-
-    total_time = time.time() - start_time
-    total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-    print('Training time {}'.format(total_time_str)) 
-
-def main(eval=False,pretrained="",dataset='coco', shuffled=False):
+def main(eval=False,pretrained="",dataset='coco', shuffled=False, name=""):
     
     model, preprocess = clip.load("ViT-B/32",device=device,jit=False) #Must set jit=False for training
     if pretrained != "":
@@ -301,6 +332,10 @@ def main(eval=False,pretrained="",dataset='coco', shuffled=False):
                 text_desc = Text_Des()
                 perturb_functions = [text_desc.shuffle_nouns_and_verb_adj, text_desc.shuffle_allbut_nouns_verb_adj,
                                     text_desc.shuffle_all_words]
+                # ['a pizza sitting on a plate on a table with drinks', 
+                # 'a table sitting on a plate on a drinks with pizza', 
+                # 'with pizza sitting on a plate a on table a drinks', 
+                # 'plate a with on a drinks sitting table on a pizza']
                 train_dataset = clip_coco_retrieval_train(image_root, train_ann_root, preprocess, shuffle_func_list=perturb_functions)
                 dataset_len = len(train_dataset)
                 train_dataloader = DataLoader(train_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=True) #Define your own dataloader
@@ -309,13 +344,10 @@ def main(eval=False,pretrained="",dataset='coco', shuffled=False):
                 dataset_len = len(train_dataset)
                 train_dataloader = DataLoader(train_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=True) #Define your own dataloader
 
-
     elif dataset == 'flickr':
-        # train_ann_root = '/ltstorage/home/2pan/dataset/COCO/coco_karpathy_train.json'
         test_ann_root = '/ltstorage/home/2pan/dataset/Flickr/test_flickr.csv'
-        # val_ann_root = '/ltstorage/home/2pan/dataset/COCO/coco_karpathy_val.json'
         image_root = '/ltstorage/home/2pan/dataset/Flickr/flickr30k-images'
-        all_ann_root = '/ltstorage/home/2pan/dataset/Flickr/flickr_annotations_30k.csv'
+        # all_ann_root = '/ltstorage/home/2pan/dataset/Flickr/flickr_annotations_30k.csv'
         # create dataloader
         all_dataset = flickr_dataset(image_root, test_ann_root, preprocess)
         dataset_len = len(all_dataset)
@@ -328,9 +360,6 @@ def main(eval=False,pretrained="",dataset='coco', shuffled=False):
         c_model.convert_weights(model) # Actually this line is unnecessary since clip by default already on float16
 
     if eval:
-        # eval_result=evaluation(model, val_dataloader, device, False)
-        # eval_result=evaluation(model, test_dataloader, device, False)
-        # convert_models_to_fp32(model,eval)
         score_test_i2t, score_test_t2i=evaluation(model, test_dataloader, device, False)
         test_result = itm_eval(score_test_i2t, score_test_t2i, test_dataloader.dataset.txt2img, test_dataloader.dataset.img2txt) 
         print(test_result)
@@ -354,7 +383,7 @@ def main(eval=False,pretrained="",dataset='coco', shuffled=False):
         scheduler = cosine_lr(optimizer, LR, WARMUP, len(train_dataloader))
 
         train(train_dataloader, val_dataloader, test_dataloader, model=model, optimizer=optimizer, loss_func=loss_func, device=device, epoch=0, 
-              dataset_len=dataset_len, scaler=scaler, shuffled = shuffled, scheduler=scheduler)
+              dataset_len=dataset_len, scaler=scaler, shuffled = shuffled, scheduler=scheduler, name=name)
 
         score_test_i2t, score_test_t2i=evaluation(model, test_dataloader, device)
         test_result = itm_eval(score_test_i2t, score_test_t2i, test_dataloader.dataset.txt2img, test_dataloader.dataset.img2txt) 
@@ -368,15 +397,20 @@ def main(eval=False,pretrained="",dataset='coco', shuffled=False):
             'epoch': EPOCH,
         }
         if shuffled:
-            filename = 'shuffled_checkpoint_final_r{:.2f}_epoch{}.pth'.format(test_result['r_mean'], EPOCH)
+            filename = '{}shuffled_checkpoint_final_r{:.2f}_epoch{}.pth'.format(name,test_result['r_mean'], EPOCH)
             torch.save(save_obj, os.path.join('outputs',filename))  
         else:
-            filename = 'original_checkpoint_final_r{:.2f}_epoch{}.pth'.format(test_result['r_mean'], EPOCH)
+            filename = '{}original_checkpoint_final_r{:.2f}_epoch{}.pth'.format(name, test_result['r_mean'], EPOCH)
             torch.save(save_obj, os.path.join('outputs',filename))  
 
 
 if __name__ == "__main__":
-    main(eval=False, pretrained="", dataset='coco', shuffled=True)
-    # main(eval=True, pretrained="outputs/original_checkpoint_best_epoch6.pth", dataset='coco', shuffled=False)
+    name = '2negdiv2_'
+    # retrieval task
+    main(eval=False, pretrained="", dataset='coco', shuffled=True, name=name)
+    # main(eval=True, pretrained="outputs/shuffled_checkpoint_best_epoch5.pth", dataset='coco', shuffled=False)
+
+    # Attribute Ownership task
+
     
     
