@@ -239,8 +239,7 @@ class VG_Attribution(Dataset):
 		self.image_preprocess = image_preprocess
 		self.top_2 = False
 		if self.attribute_ownership:
-			# self.cla_name = ["exchange", "separate"]
-			self.cla_name = ['separate']
+			self.cla_name = ["exchange", "separate"]
 			self.top_2 = True
 		elif self.logic:
 			self.cla_name = ["negative"]
@@ -267,13 +266,12 @@ class VG_Attribution(Dataset):
 		if self.attribute_ownership:
 			# Each test case has a correct and incorrect caption.
 			true_caption = test_case["true_caption"]
-			# false_caption = test_case["false_caption"]
+			false_caption = test_case["false_caption"]
 			split_semantic = "the {} and the {} are {} and {} respectively".format(test_case["obj1_name"],
 																				   test_case["obj2_name"],
 																				   test_case["attributes"][0],
 																				   test_case["attributes"][1])
-			# caption_options = [true_caption, false_caption, split_semantic]
-			caption_options = [true_caption, split_semantic]
+			caption_options = [true_caption, false_caption, split_semantic]
 		elif self.logic:
 			positive = "the {} is {} and the {} is {}".format(test_case["obj1_name"], test_case["attributes"][0],
 															  test_case["obj2_name"], test_case["attributes"][1])

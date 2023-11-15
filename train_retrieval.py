@@ -407,7 +407,7 @@ def main(eval=False,pretrained="",dataset='coco', shuffled=False, name=""):
 if __name__ == "__main__":
     name = '2negdiv2_'
     # retrieval task
-    main(eval=False, pretrained="", dataset='coco', shuffled=True, name=name)
+    main(eval=True, pretrained="/ltstorage/home/2pan/CLIP/outputs/vg_finetuned-2pos1neg-ViT-B-32_checkpoint_final_epoch20.pth", dataset='flickr', shuffled=True, name=name)
     # main(eval=True, pretrained="outputs/shuffled_checkpoint_best_epoch5.pth", dataset='coco', shuffled=False)
 
     # Attribute Ownership task

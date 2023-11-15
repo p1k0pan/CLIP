@@ -78,16 +78,21 @@ def train(train_dataloader,val_dataloader, model, optimizer, loss_func, device, 
                 with autocast():
                     logits_per_image, logits_per_text = model(images, caption_tokenized)
                     assert logits_per_image.size(0) == images.size(0), "size not compatible"
-                    # if idx != 1:
-                    #     ground_truth = torch.eye(logits_per_image.size(0),device=device)
-                    #     cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
-                    # else:
-                    #     negative_ground_truth = torch.zeros_like(logits_per_image,device=device)
-                    #     cur_loss += (loss_img(logits_per_image,negative_ground_truth) + loss_txt(logits_per_text,negative_ground_truth))/2
-                    ground_truth = torch.eye(logits_per_image.size(0),device=device)
-                    cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
-
-                    total_loss += cur_loss.item()
+                    if idx !=1 :
+                        # if idx ==0: # only use true caption as positive on training
+                        #     ground_truth = torch.eye(logits_per_image.size(0),device=device)
+                        #     cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
+                        # if idx == 2: # only use split_semantic as positive on training
+                        #     ground_truth = torch.eye(logits_per_image.size(0),device=device)
+                        #     cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
+                        ground_truth = torch.eye(logits_per_image.size(0),device=device)
+                        cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
+                    else:
+                        # continue # don't use negative sample on training
+                        negative_ground_truth = torch.zeros_like(logits_per_image,device=device)
+                        cur_loss += (loss_img(logits_per_image,negative_ground_truth) + loss_txt(logits_per_text,negative_ground_truth))/2
+                   
+                    total_loss += cur_loss
 
             # cur_loss.backward()
             scaler.scale(cur_loss).backward()
@@ -102,9 +107,9 @@ def train(train_dataloader,val_dataloader, model, optimizer, loss_func, device, 
                 c_model.convert_weights(model)
             scaler.update()
 
-            metric_logger.update(loss_ita=cur_loss.item())
+            metric_logger.update(loss_ita=cur_loss)
             metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-            wandb.log({'loss_ita': cur_loss.item(), 'lr': optimizer.param_groups[0]["lr"]})
+            wandb.log({'loss_ita': cur_loss, 'lr': optimizer.param_groups[0]["lr"]})
         
         epoch_loss = total_loss / step
         metric_logger.update(loss_total=epoch_loss)
@@ -182,22 +187,26 @@ def evaluation(model, data_loader, device, validate=False):
             caption_embeddings = caption_embeddings / caption_embeddings.norm(dim=1, keepdim = True)
             caption_options.append(np.expand_dims(caption_embeddings.numpy(), axis=1))
             if validate:
+                logits_per_image = image_embeddings @ caption_embeddings.t()
+                logits_per_text = logits_per_image.T
                 loss_func = nn.CrossEntropyLoss()
                 with autocast():
-                    logits_per_image = image_embeddings @ caption_embeddings.t()
-                    logits_per_text = logits_per_image.T
-                    # print(logits_per_image.size())
-                    # if idx != 1:
-                    #     ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
-                    #     cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
-                    # else:
-                    #     negative_ground_truth = torch.zeros_like(logits_per_image,device="cpu")
-                    #     cur_loss += (loss_func(logits_per_image,negative_ground_truth) + loss_func(logits_per_text,negative_ground_truth))/2
-                    ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
-                    cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
+                    if idx != 1:
+                        # if idx == 0:
+                        #     ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
+                        #     cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
+                        # if idx == 2: # only use split_semantic as positive on training
+                        #     ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
+                        #     cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
+                        ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
+                        cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
+                    else:
+                        negative_ground_truth = torch.zeros_like(logits_per_image,device="cpu")
+                        cur_loss += (loss_func(logits_per_image,negative_ground_truth) + loss_func(logits_per_text,negative_ground_truth))/2
+                        # continue
 
-                    total_loss += cur_loss.item()
-                wandb.log({"eval_loss":cur_loss.item()})
+                    total_loss += cur_loss
+                wandb.log({"eval_loss":cur_loss})
 
         # print(len(caption_options))
         image_options = np.concatenate(image_options, axis=1)  # B x K x D
@@ -376,9 +385,9 @@ def main(eval=False,pretrained="",dataset='ao', name=""):
 
 
 if __name__ == "__main__":
-    name = 'train-2pos-ViT-B-32'
+    name = 'finetuned-2pos1neg-ViT-B-32'
     # retrieval task
-    main(eval=False, pretrained="", dataset='ao', name=name)
+    main(eval=False, pretrained="/ltstorage/home/2pan/CLIP/outputs/vg_finetuned-2pos1neg-ViT-B-32_checkpoint_final_epoch20.pth", dataset='ao', name=name)
     # main(eval=True, pretrained="outputs/shuffled_checkpoint_best_epoch5.pth", dataset='coco', shuffled=False)
 
     # Attribute Ownership task
