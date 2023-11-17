@@ -28,7 +28,9 @@ def top_n_accuracy(predictions, targets, n):
 
 	sorted_indexes = np.argsort(predictions, axis=1)[:, ::-1]
 	for i in range(total):
-		if np.where(targets[i] == 1) in sorted_indexes[i][:n]:
+		if np.where(targets[i] == 1) in sorted_indexes[i][:n]: 
+			# np.where(targets[i] == 1) the index where target is true
+			# sorted_indexes[i][:1] the first index of sorted indexes
 			correct_count += 1
 
 	accuracy = correct_count / total

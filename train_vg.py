@@ -13,7 +13,7 @@ BATCH_SIZE = 128
 EPOCH = 20
 LR=1e-6
 WARMUP = 3000
-device = "cuda:1" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
+device = "cuda:0" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
 import json
 import numpy as np
 import pandas as pd
@@ -35,7 +35,7 @@ def convert_models_to_fp32(model,eval):
             p.grad.data = p.grad.data.float() 
 
 def train(train_dataloader,val_dataloader, model, optimizer, loss_func, device, total_epoch, init_lr, 
-          scheduler=None, scaler = None, name="", val_dataset=None):
+          scheduler=None, scaler = None, name="", val_dataset=None, dataset="ao"):
     model.train()
     loss_img = loss_func
     loss_txt = loss_func
@@ -125,16 +125,21 @@ def train(train_dataloader,val_dataloader, model, optimizer, loss_func, device, 
         if val_dataset is not None:
             val_result = val_dataset.evaluate_scores(all_scores)
             df = pd.DataFrame(val_result)
-            correct_df = df[df['Attributes'] == 'correct']
-            separate_df = df[df['Attributes'] == 'separate']
-            top = correct_df['correct_top-1'].values + separate_df['separate_top-1'].values
+            if dataset == 'ao':
+                correct_df = df[df['Attributes'] == 'correct']
+                separate_df = df[df['Attributes'] == 'separate']
+                top = correct_df['correct_top-1'].values + separate_df['separate_top-1'].values
+            elif dataset == 'logic':
+                correct_df = df[df['Attributes'] == 'correct']
+                negative_df = df[df['Attributes'] == 'negative']
+                top = correct_df['correct_top-1'].values - negative_df['negative_top-1'].values
             if top>best:
                 save_obj = {
                     'model': model.state_dict(),
                     'optimizer': optimizer.state_dict(),
                     'epoch': epoch,
                 }
-                filename = 'vg_{}_checkpoint_best_epoch{}.pth'.format(name, epoch)
+                filename = '{}_checkpoint_best_epoch{}.pth'.format(name, epoch)
                 torch.save(save_obj, os.path.join('outputs',filename))  
 
                 best = top
@@ -156,6 +161,8 @@ def evaluation(model, data_loader, device, validate=False):
     step=0
     total_loss = 0
     scores = []
+    scores_cor_exc = []
+    scores_sep_exc =[]
     for i,batch in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
     # for batch in train_dataloader :
         step+=1
@@ -166,6 +173,8 @@ def evaluation(model, data_loader, device, validate=False):
         image_options.append(np.expand_dims(image_embeddings.numpy(), axis=1))
 
         caption_options = []
+        caption_cor_exc = []
+        caption_sep_exc =[]
         # print(batch['caption_options'])
         """
         [('a road with a red dirt on a small moped on a man helmet',), 
@@ -186,6 +195,16 @@ def evaluation(model, data_loader, device, validate=False):
             #                                                             keepdims=True)  # B x D
             caption_embeddings = caption_embeddings / caption_embeddings.norm(dim=1, keepdim = True)
             caption_options.append(np.expand_dims(caption_embeddings.numpy(), axis=1))
+            
+            if idx == 0:
+                caption_cor_exc.insert(0, np.expand_dims(caption_embeddings.numpy(), axis=1))
+            elif idx==1:
+                caption_sep_exc.append(np.expand_dims(caption_embeddings.numpy(), axis=1))
+                caption_cor_exc.append(np.expand_dims(caption_embeddings.numpy(), axis=1))
+            elif idx == 2:
+                caption_sep_exc.insert(0, np.expand_dims(caption_embeddings.numpy(), axis=1))
+
+            # validate need calculate loss
             if validate:
                 logits_per_image = image_embeddings @ caption_embeddings.t()
                 logits_per_text = logits_per_image.T
@@ -195,11 +214,11 @@ def evaluation(model, data_loader, device, validate=False):
                         # if idx == 0:
                         #     ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
                         #     cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
-                        # if idx == 2: # only use split_semantic as positive on training
-                        #     ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
-                        #     cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
-                        ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
-                        cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
+                        if idx == 2: # only use split_semantic as positive on training
+                            ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
+                            cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
+                        # ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
+                        # cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
                     else:
                         negative_ground_truth = torch.zeros_like(logits_per_image,device="cpu")
                         cur_loss += (loss_func(logits_per_image,negative_ground_truth) + loss_func(logits_per_text,negative_ground_truth))/2
@@ -214,6 +233,11 @@ def evaluation(model, data_loader, device, validate=False):
         caption_options = np.concatenate(caption_options, axis=1)  # B x L x D
         # print("caption_options", caption_options.shape)
         batch_scores = np.einsum("nkd,nld->nkl", image_options, caption_options)  # B x K x L
+
+        caption_cor_exc = np.concatenate(caption_cor_exc, axis=1)  # B x L x D
+        caption_sep_exc = np.concatenate(caption_sep_exc, axis=1)  # B x L x D
+        batch_cor_exc_scores = np.einsum("nkd,nld->nkl", image_options, caption_cor_exc)  # B x K x L
+        batch_sep_exc_scores = np.einsum("nkd,nld->nkl", image_options, caption_sep_exc)  # B x K x L
 
         # # 例子矩阵
         # nkd = image_options
@@ -236,12 +260,15 @@ def evaluation(model, data_loader, device, validate=False):
         # batch_scores = batch_scores_cos / batch_scores
 
         scores.append(batch_scores)
+        scores_cor_exc.append(batch_cor_exc_scores)
+        scores_sep_exc.append(batch_sep_exc_scores)
     if validate:
         wandb.log({"eval_avg_loss":total_loss/step})
     print(metric_logger.global_avg())
     all_scores = np.concatenate(scores, axis=0)  # N x K x L
-    print("all_scores", all_scores.shape)
-    return all_scores
+    cor_exc_scores = np.concatenate(scores_cor_exc, axis=0)
+    sep_exc_scores = np.concatenate(scores_sep_exc, axis=0)
+    return [cor_exc_scores, all_scores, sep_exc_scores]
 
 
 def main(eval=False,pretrained="",dataset='ao', name=""):
@@ -260,54 +287,59 @@ def main(eval=False,pretrained="",dataset='ao', name=""):
         model.load_state_dict(checkpoint['model'])
 
     print("load dataset")
+    root_dir="/ltstorage/home/2pan/dataset/VG_Attribution"
+    annotation_file = os.path.join(root_dir, "visual_genome_attribution.json")
+    train_file = os.path.join(root_dir, "train_visual_genome_attribution.json")
+    test_file = os.path.join(root_dir, "test_visual_genome_attribution.json")
+    val_file = os.path.join(root_dir, "val_visual_genome_attribution.json")
+    image_dir = os.path.join(root_dir, "images")
+    if not os.path.exists(image_dir):
+        print("Image Directory for VG_Attribution could not be found!")
+        os.makedirs(root_dir, exist_ok=True)
+        image_zip_file = os.path.join(root_dir, "vgr_vga_images.zip")
+        subprocess.call(["gdown", "--no-cookies", "1qaPlrwhGNMrR3a11iopZUT_GPP_LrgP9", "--output", image_zip_file])
+        subprocess.call(["unzip", "vgr_vga_images.zip"], cwd=root_dir)
 
-    if dataset == 'ao':
-        root_dir="/ltstorage/home/2pan/dataset/VG_Attribution"
-        annotation_file = os.path.join(root_dir, "visual_genome_attribution.json")
-        train_file = os.path.join(root_dir, "train_visual_genome_attribution.json")
-        test_file = os.path.join(root_dir, "test_visual_genome_attribution.json")
-        val_file = os.path.join(root_dir, "val_visual_genome_attribution.json")
-        image_dir = os.path.join(root_dir, "images")
-        if not os.path.exists(image_dir):
-            print("Image Directory for VG_Attribution could not be found!")
-            os.makedirs(root_dir, exist_ok=True)
-            image_zip_file = os.path.join(root_dir, "vgr_vga_images.zip")
-            subprocess.call(["gdown", "--no-cookies", "1qaPlrwhGNMrR3a11iopZUT_GPP_LrgP9", "--output", image_zip_file])
-            subprocess.call(["unzip", "vgr_vga_images.zip"], cwd=root_dir)
+    if not os.path.exists(annotation_file):
+        subprocess.call(["gdown", "--id", "13tWvOrNOLHxl3Rm9cR3geAdHx2qR3-Tw", "--output", annotation_file])
+    # create dataloader
+    if eval:
+        with open(test_file, "r") as f:
+            test_dataset = json.load(f)
 
-        if not os.path.exists(annotation_file):
-            subprocess.call(["gdown", "--id", "13tWvOrNOLHxl3Rm9cR3geAdHx2qR3-Tw", "--output", annotation_file])
+        for item in test_dataset:
+            item["image_path"] = os.path.join(image_dir, item["image_path"])
 
-        # create dataloader
-        if eval:
-            with open(test_file, "r") as f:
-                test_dataset = json.load(f)
-
+        if dataset == "ao":
+            test_dataset = snare_datasets.VG_Attribution(preprocess, attribute_ownership=True, dataset=test_dataset)
+        elif dataset == "logic":
+            test_dataset = snare_datasets.VG_Attribution(preprocess, logic=True, dataset=test_dataset)
+        test_dataloader = DataLoader(test_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
+    else:
+        with open(train_file, "r") as f:
+            train_dataset = json.load(f)
+            for item in train_dataset:
+                item["image_path"] = os.path.join(image_dir, item["image_path"])
+        with open(test_file, "r") as f:
+            test_dataset = json.load(f)
             for item in test_dataset:
                 item["image_path"] = os.path.join(image_dir, item["image_path"])
+        with open(val_file, "r") as f:
+            val_dataset = json.load(f)
+            for item in val_dataset:
+                item["image_path"] = os.path.join(image_dir, item["image_path"])
 
-            test_dataset = snare_datasets.VG_Attribution(preprocess, attribute_ownership=True, dataset=test_dataset)
-            test_dataloader = DataLoader(test_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
-        else:
-            with open(train_file, "r") as f:
-                train_dataset = json.load(f)
-                for item in train_dataset:
-                    item["image_path"] = os.path.join(image_dir, item["image_path"])
-            with open(test_file, "r") as f:
-                test_dataset = json.load(f)
-                for item in test_dataset:
-                    item["image_path"] = os.path.join(image_dir, item["image_path"])
-            with open(val_file, "r") as f:
-                val_dataset = json.load(f)
-                for item in val_dataset:
-                    item["image_path"] = os.path.join(image_dir, item["image_path"])
-
+        if dataset == 'ao':
             train_dataset = snare_datasets.VG_Attribution(preprocess, attribute_ownership=True, dataset=train_dataset)
             val_dataset = snare_datasets.VG_Attribution(preprocess, attribute_ownership=True, dataset=val_dataset)
             test_dataset = snare_datasets.VG_Attribution(preprocess, attribute_ownership=True, dataset=test_dataset)
-            train_dataloader = DataLoader(train_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=True)
-            val_dataloader = DataLoader(val_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
-            test_dataloader = DataLoader(test_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
+        elif dataset == 'logic':
+            train_dataset = snare_datasets.VG_Attribution(preprocess, logic=True, dataset=train_dataset)
+            val_dataset = snare_datasets.VG_Attribution(preprocess, logic=True, dataset=val_dataset)
+            test_dataset = snare_datasets.VG_Attribution(preprocess, logic=True, dataset=test_dataset)
+        train_dataloader = DataLoader(train_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=True)
+        val_dataloader = DataLoader(val_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
+        test_dataloader = DataLoader(test_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
 
 
     if device == "cpu":
@@ -338,6 +370,7 @@ def main(eval=False,pretrained="",dataset='ao', name=""):
         wandb.init(
         # set the wandb project where this run will be logged
         project="finetune_clip_vg",
+        name= name,
         
         # track hyperparameters and run metadata
         config={
@@ -354,7 +387,7 @@ def main(eval=False,pretrained="",dataset='ao', name=""):
         scheduler = cosine_lr(optimizer, LR, WARMUP, len(train_dataloader))
 
         train(train_dataloader, val_dataloader, model=model, optimizer=optimizer, loss_func=loss_func, device=device, total_epoch=EPOCH, 
-            init_lr = LR, scaler=scaler, scheduler=scheduler, name=name, val_dataset=val_dataset)
+            init_lr = LR, scaler=scaler, scheduler=scheduler, name=name, val_dataset=val_dataset, dataset = dataset)
 
         convert_models_to_fp32(model, True)
         all_scores=evaluation(model, test_dataloader, device, True)
@@ -372,7 +405,7 @@ def main(eval=False,pretrained="",dataset='ao', name=""):
                 'optimizer': optimizer.state_dict(),
                 'epoch': EPOCH,
             }
-            filename = 'vg_{}_checkpoint_final_epoch{}.pth'.format(name, EPOCH)
+            filename = '{}_checkpoint_final_epoch{}.pth'.format(name, EPOCH)
             torch.save(save_obj, os.path.join('outputs',filename))  
         
             print(f"Saving results to {output_file}")
@@ -385,10 +418,10 @@ def main(eval=False,pretrained="",dataset='ao', name=""):
 
 
 if __name__ == "__main__":
-    name = 'finetuned-2pos1neg-ViT-B-32'
+    name = 'ao_ft-2pos1neg-ViT-B-32'
     # retrieval task
-    main(eval=False, pretrained="/ltstorage/home/2pan/CLIP/outputs/vg_finetuned-2pos1neg-ViT-B-32_checkpoint_final_epoch20.pth", dataset='ao', name=name)
-    # main(eval=True, pretrained="outputs/shuffled_checkpoint_best_epoch5.pth", dataset='coco', shuffled=False)
+    main(eval=False, pretrained="/ltstorage/home/2pan/CLIP/outputs/vg_1-n_original_checkpoint_final_r63.52_epoch20_batch128_lr1e-06_wd0.001.pth", dataset='ao', name=name)
+    # main(eval=True, pretrained="", dataset='ao', name=name)
 
     # Attribute Ownership task
 

@@ -247,7 +247,14 @@ class VG_Attribution(Dataset):
 			self.cla_name = ["exchange"]
 
 		self.cla_name.insert(0, "correct")
-		self.targets = [np.repeat(np.diag(np.ones(len(self.cla_name)))[i][None, :], len(self.dataset), axis=0)
+		if self.attribute_ownership:
+			cor_exc = np.array([1, 0])
+			cor_exc_target = np.full((len(self.dataset), len(cor_exc)), cor_exc)
+			neg = np.array([0, 1, 0])
+			neg_target = np.full((len(self.dataset), len(neg)), neg)
+			self.targets = [cor_exc_target, neg_target, cor_exc_target]
+		else:
+			self.targets = [np.repeat(np.diag(np.ones(len(self.cla_name)))[i][None, :], len(self.dataset), axis=0)
 						for i in range(len(self.cla_name))]
 		
 	def __len__(self):
@@ -298,31 +305,35 @@ class VG_Attribution(Dataset):
 			scores_t2i = scores
 			scores_i2t = scores
 
-		score = np.squeeze(scores_i2t, axis=1)
-		top_1_dict = {self.cla_name[i]: top_n_accuracy(score, self.targets[i], 1) for i in
+		# score = np.squeeze(scores_i2t, axis=1)
+		# top_1_dict = {self.cla_name[i]: top_n_accuracy(score, self.targets[i], 1) for i in
+		# 			  range(len(self.cla_name))}
+		# if self.top_2:
+		# 	top_2_list = {self.cla_name[i]: top_n_accuracy(score, self.targets[i], 2) for i in
+		# 				  range(len(self.cla_name))}
+		score = [np.squeeze(score, axis=1) for score in scores]
+		print(score[0].shape, score[1].shape)
+		top_1_dict = {self.cla_name[i]: top_n_accuracy(score[i], self.targets[i], 1) for i in
 					  range(len(self.cla_name))}
-		if self.top_2:
-			top_2_list = {self.cla_name[i]: top_n_accuracy(score, self.targets[i], 2) for i in
-						  range(len(self.cla_name))}
 
 		result_records = []
 
 		# 子类别数据
-		all_attributes = np.array(self.all_attributes)
-		for attr in np.unique(all_attributes):
-			attr_mask = (all_attributes == attr)
-			score_sub = score[attr_mask]
-			if attr_mask.sum() < 25:
-				continue
-			res_dict = {
-				"Attributes": attr,
-				"Count": attr_mask.sum(),
-			}
-			for i in range(len(self.cla_name)):
-				res_dict.update({self.cla_name[i] + "_top-1": top_n_accuracy(score_sub, self.targets[i][attr_mask], 1)[0]})
-				if self.top_2:
-					res_dict.update({self.cla_name[i] + "_top-2": top_n_accuracy(score_sub, self.targets[i][attr_mask], 2)[0]})
-			result_records.append(res_dict)
+		# all_attributes = np.array(self.all_attributes)
+		# for attr in np.unique(all_attributes):
+		# 	attr_mask = (all_attributes == attr)
+		# 	score_sub = score[attr_mask]
+		# 	if attr_mask.sum() < 25:
+		# 		continue
+		# 	res_dict = {
+		# 		"Attributes": attr,
+		# 		"Count": attr_mask.sum(),
+		# 	}
+		# 	for i in range(len(self.cla_name)):
+		# 		res_dict.update({self.cla_name[i] + "_top-1": top_n_accuracy(score_sub, self.targets[i][attr_mask], 1)[0]})
+		# 		if self.top_2:
+		# 			res_dict.update({self.cla_name[i] + "_top-2": top_n_accuracy(score_sub, self.targets[i][attr_mask], 2)[0]})
+		# 	result_records.append(res_dict)
 
 		# 总体数据
 		for key, value in top_1_dict.items():
@@ -332,8 +343,8 @@ class VG_Attribution(Dataset):
 				"Count": value[1],
 			}
 			print(key, value[0])
-			if self.top_2:
-				res_dict.update({key+"_top-2": top_2_list[key][0]})
+			# if self.top_2:
+			# 	res_dict.update({key+"_top-2": top_2_list[key][0]})
 			result_records.append(res_dict)
 		return result_records
 
