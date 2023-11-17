@@ -14,6 +14,7 @@ BATCH_SIZE = 128
 EPOCH = 20
 LR=1e-6
 WARMUP = 3000
+WD = 0.001
 device = "cuda:1" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
 import json
 import re
@@ -23,7 +24,7 @@ import numpy as np
 
 import wandb
 from shuffle_func import Text_Des
-from datasets import clip_coco_retrieval_train, clip_coco_retrieval_eval, flickr_dataset
+from datasets import clip_coco_retrieval_train, clip_coco_retrieval_eval, clip_vg_retrieval_eval, flickr_dataset, clip_vg_retrieval_train
 from scheduler import cosine_lr
 from torch.cuda.amp import GradScaler, autocast
 from collections import Counter
@@ -272,34 +273,6 @@ def itm_eval(scores_i2t, scores_t2i, txt2img, img2txt):
                     'r_mean': r_mean}
     return eval_result
 
-def evaluate_scores(scores, cla_name):
-    if isinstance(scores, tuple):
-        scores_i2t = scores[0]
-        scores_t2i = scores[1].T  # Make it N_ims x N_text
-    else:
-        scores_t2i = scores
-        scores_i2t = scores
-
-    # preds = np.argmax(np.squeeze(scores_i2t, axis=1), axis=-1)
-    preds = np.argmax()
-    count = dict(Counter(preds))
-    # correct_mask = (preds == 0)
-    result_records = []
-
-    for ids, pr in count.items():
-        if ids != 0:
-            rela = cla_name[ids - 1]
-        else:
-            rela = "Correct"
-        result_records.append({
-            "Relation": rela,
-            "Accuracy": pr / len(preds),
-            "Count": pr,
-            "Dataset": "Visual Genome Relation"
-        })
-        print(rela,  pr / len(preds))
-    return result_records
-
 def main(eval=False,pretrained="",dataset='coco', shuffled=False, name=""):
     
     model, preprocess = clip.load("ViT-B/32",device=device,jit=False) #Must set jit=False for training
@@ -314,6 +287,7 @@ def main(eval=False,pretrained="",dataset='coco', shuffled=False, name=""):
         # checkpoint['model']["vocab_size"] = model.vocab_size 
 
         model.load_state_dict(checkpoint['model'])
+        # model.load_state_dict(checkpoint['state_dict'])
 
     print("load dataset")
     if dataset=='coco':
@@ -351,7 +325,28 @@ def main(eval=False,pretrained="",dataset='coco', shuffled=False, name=""):
         # create dataloader
         all_dataset = flickr_dataset(image_root, test_ann_root, preprocess)
         dataset_len = len(all_dataset)
-        test_dataloader = DataLoader(all_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=True) #Define your own dataloader
+        test_dataloader = DataLoader(all_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False) #Define your own dataloader
+    
+    elif dataset == 'vg':
+        test_vg_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/test_visual_genome_attribution.json'
+        test_retrieval_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/test_retrieval_VG_attribution.json'
+        image_root = '/ltstorage/home/2pan/dataset/VG_Attribution/images'
+        # all_ann_root = '/ltstorage/home/2pan/dataset/Flickr/flickr_annotations_30k.csv'
+        # create dataloader
+        all_dataset = clip_vg_retrieval_eval(image_root, test_retrieval_ann_root,test_vg_ann_root, preprocess)
+        test_dataloader = DataLoader(all_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False) #Define your own dataloader
+        if not eval:
+            train_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/train_visual_genome_attribution.json'
+            # train_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/train_retrieval_VG_attribution.json'
+            # create dataloader
+            train_dataset = clip_vg_retrieval_train(image_root, train_ann_root, preprocess)
+            dataset_len = len(train_dataset)
+            train_dataloader = DataLoader(train_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=True) #Define your own dataloader
+
+            val_retrieval_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/val_retrieval_VG_attribution.json'
+            val_vg_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/val_visual_genome_attribution.json'
+            val_dataset = clip_vg_retrieval_eval(image_root, val_retrieval_ann_root,val_vg_ann_root, preprocess)
+            val_dataloader = DataLoader(val_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
 
 
     if device == "cpu":
@@ -366,23 +361,26 @@ def main(eval=False,pretrained="",dataset='coco', shuffled=False, name=""):
     else:
         wandb.init(
         # set the wandb project where this run will be logged
-        project="finetune_clip",
+        project="train_vg",
         
         # track hyperparameters and run metadata
         config={
         "epochs": 1,
-        })
+        },
+        name = name)
 
         loss_func = nn.CrossEntropyLoss()
         # loss_func = nn.BCEWithLogitsLoss()
         # optimizer = optim.Adam(model.parameters(), lr=1e-5,betas=(0.9,0.98),eps=1e-6,weight_decay=1e-5) 
-        optimizer = optim.Adam(model.parameters(), lr=LR,betas=(0.9,0.98),eps=1e-6,weight_decay=0.001) #Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
+        optimizer = optim.Adam(model.parameters(), lr=LR,betas=(0.9,0.98),eps=1e-6,weight_decay=WD) 
+        # optimizer = optim.Adam(model.parameters(), lr=LR,betas=(0.9,0.98),eps=1e-6,weight_decay=0.001) #Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
         # optimizer = optim.Adam(model.parameters(), lr=5e-5,betas=(0.9,0.98),eps=1e-6,weight_decay=0.2) 
 
         scaler = GradScaler()
         scheduler = cosine_lr(optimizer, LR, WARMUP, len(train_dataloader))
 
-        train(train_dataloader, val_dataloader, test_dataloader, model=model, optimizer=optimizer, loss_func=loss_func, device=device, epoch=0, 
+        train(train_dataloader, val_dataloader, test_dataloader, model=model, optimizer=optimizer, loss_func=loss_func,
+               device=device, total_epoch=EPOCH, init_lr=LR, 
               dataset_len=dataset_len, scaler=scaler, shuffled = shuffled, scheduler=scheduler, name=name)
 
         score_test_i2t, score_test_t2i=evaluation(model, test_dataloader, device)
@@ -400,14 +398,15 @@ def main(eval=False,pretrained="",dataset='coco', shuffled=False, name=""):
             filename = '{}shuffled_checkpoint_final_r{:.2f}_epoch{}.pth'.format(name,test_result['r_mean'], EPOCH)
             torch.save(save_obj, os.path.join('outputs',filename))  
         else:
-            filename = '{}original_checkpoint_final_r{:.2f}_epoch{}.pth'.format(name, test_result['r_mean'], EPOCH)
+            filename = '{}original_checkpoint_final_r{:.2f}_epoch{}_batch{}_lr{}_wd{}.pth'.format(name, test_result['r_mean'], EPOCH, BATCH_SIZE, LR, WD)
             torch.save(save_obj, os.path.join('outputs',filename))  
 
 
 if __name__ == "__main__":
-    name = '2negdiv2_'
+    name = 'vg_1-n_'
     # retrieval task
-    main(eval=True, pretrained="/ltstorage/home/2pan/CLIP/outputs/vg_finetuned-2pos1neg-ViT-B-32_checkpoint_final_epoch20.pth", dataset='flickr', shuffled=True, name=name)
+    main(eval=True, pretrained="/ltstorage/home/2pan/CLIP/outputs/vg_1-n_original_checkpoint_final_r63.52_epoch20_batch128_lr1e-06_wd0.001.pth", dataset='vg', shuffled=False, name=name)
+    # main(eval=True, pretrained="/ltstorage/home/2pan/CLIP/outputs/attribute_ownership/ao_zs-sep_exc-ViT-B-32_checkpoint_final_epoch20.pth", dataset='vg', shuffled=True, name=name)
     # main(eval=True, pretrained="outputs/shuffled_checkpoint_best_epoch5.pth", dataset='coco', shuffled=False)
 
     # Attribute Ownership task

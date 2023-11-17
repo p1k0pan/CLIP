@@ -145,3 +145,100 @@ class flickr_dataset(Dataset):
     
     def __getitem__(self, index):    
         return self.image_feat[index], self.text_feat[self.img2txt[index]]
+        
+class clip_vg_retrieval_train(Dataset):
+    def __init__(self, image_root, ann_root, preprocess, max_words=30):
+
+        self.image_root = image_root
+        self.max_words = max_words
+        self.preprocess = preprocess
+        self.annotation = json.load(open(ann_root,'r'))
+
+        self.img_ids = {}  
+        n = 0
+        for ann in self.annotation:
+            img_id = ann['image_id']
+            if img_id not in self.img_ids.keys():
+                self.img_ids[img_id] = n
+                n += 1    
+        
+    def __len__(self):
+        return len(self.annotation)
+
+    def __getitem__(self, idx):
+        ann = self.annotation[idx]
+
+        img_path = os.path.join(self.image_root,ann['image_id']+'.jpg')      
+        image = self.preprocess(Image.open(img_path)) # Image from PIL module
+
+        caption = ann['true_captions'][0]
+        caption = pre_caption(caption, self.max_words) 
+        # caption = ann['true_caption']
+        # caption = pre_caption(caption, self.max_words) 
+        
+        # shuffled_texts = []
+        # for shuffle_func in self.shuffle_func_list:
+        #     shuffled_texts.append(shuffle_func(text))
+
+        # all_caption = [text] + shuffled_texts # 4 texts: 1 original text + 3 shuffled texts
+        all_caption = clip.tokenize(caption)
+
+        return image,all_caption
+
+class clip_vg_retrieval_eval(Dataset):
+    
+    def __init__(self, image_root, ann_ret_root,ann_vg_root, preprocess, validate=False, max_words=30 ):
+
+        self.image_root = image_root
+        self.preprocess = preprocess
+        self.annotation = json.load(open(ann_ret_root,'r'))
+        self.ann_vg = json.load(open(ann_vg_root,'r'))
+
+        self.text = []
+        self.image = []
+        self.txt2img = {}
+        self.img2txt = {}
+        self.text_feat = []
+        self.image_feat = []
+        self.max_words = max_words
+
+        txt_id = 0
+        for img_id, ann in enumerate(self.annotation):
+            self.image.append(ann['image_id'])
+            img_path = os.path.join(self.image_root,ann['image_id']+'.jpg')      
+            img = self.preprocess(Image.open(img_path).convert('RGB'))
+            self.image_feat.append(img)
+            self.img2txt[img_id] = []
+            for i, caption in enumerate(ann['true_captions']):
+                text = pre_caption(caption,max_words)
+                self.text.append(text)
+                txt = clip.tokenize(text)
+                self.text_feat.append(txt)
+                self.img2txt[img_id].append(txt_id)
+                self.txt2img[txt_id] = img_id
+                txt_id += 1
+                if validate:
+                    break
+
+    def __len__(self):
+        return len(self.annotation)
+    
+    def __getitem__(self, index):    
+        ann = self.ann_vg[index]
+
+        img_path = os.path.join(self.image_root,ann['image_id']+'.jpg')      
+        image = self.preprocess(Image.open(img_path)) # Image from PIL module
+
+        caption = ann['true_captions'][0]
+        caption = pre_caption(caption, self.max_words) 
+        # caption = ann['true_caption']
+        # caption = pre_caption(caption, self.max_words) 
+        
+        # shuffled_texts = []
+        # for shuffle_func in self.shuffle_func_list:
+        #     shuffled_texts.append(shuffle_func(text))
+
+        # all_caption = [text] + shuffled_texts # 4 texts: 1 original text + 3 shuffled texts
+        all_caption = clip.tokenize(caption)
+
+        return image,all_caption
