@@ -18,9 +18,8 @@ from sklearn.model_selection import train_test_split
 
 
 class VG_Relation(Dataset):
-	def __init__(self, image_preprocess, subordination_relation=False, multi_spatial_relation=False,
-				 root_dir="",
-				 download=False, *args, **kwargs):
+	def __init__(self, image_preprocess, subordination_relation=False, multi_spatial_relation=False, dataset=None,
+				  *args, **kwargs):
 		'''
 		image_preprocess: a function that takes in a PIL image and returns a tensor.
 		text_perturb_fn: Not used for this dataset. Just for compatibility with other datasets.
@@ -28,26 +27,10 @@ class VG_Relation(Dataset):
 		root_dir: Directory for the VG-R dataset.
 		download: Whether to download the dataset if it does not exist.
 		'''
-		root_dir="~/dataset/VG_Attribution"
-		self.root_dir = root_dir
 		self.subordination_relation = subordination_relation
 		self.multi_spatial_relation = multi_spatial_relation
 		assert self.subordination_relation * self.multi_spatial_relation == 0
-		annotation_file = os.path.join(root_dir, "visual_genome_relation.json")
-		image_dir = os.path.join(root_dir, "images")
-		if not os.path.exists(image_dir):
-			print("Image Directory for VG_Relation could not be found!")
-			if download:
-				self.download()
-			else:
-				raise RuntimeError(
-					"Please either download the dataset by letting `--download` or specify the correct directory.")
-
-		if not os.path.exists(annotation_file):
-			subprocess.call(["gdown", "--id", "1kX2iCHEv0CADL8dSO1nMdW-V0NqIAiP3", "--output", annotation_file])
-
-		with open(annotation_file, "r") as f:
-			self.dataset = json.load(f)
+		self.dataset = dataset
 
 		self.top_2 = False
 		self.all_relations = list()
@@ -58,7 +41,6 @@ class VG_Relation(Dataset):
 			if self.multi_spatial_relation else ["near", "next to", "beside", "on the side of", "surrounding",
 												 "close to", "standing beside", "with", "by"]
 		for item in self.dataset:
-			item["image_path"] = os.path.join(image_dir, item["image_path"])
 			if (item["relation_name"] in relations) and self.multi_spatial_relation:
 				self.dataset_.append(item)
 				self.all_relations.append(item["relation_name"])
@@ -66,6 +48,7 @@ class VG_Relation(Dataset):
 				self.dataset_.append(item)
 				self.all_relations.append(item["relation_name"])
 		self.dataset = self.dataset_
+
 		if self.multi_spatial_relation:
 			self.cla_name = relations
 			self.top_2 = True
@@ -76,13 +59,21 @@ class VG_Relation(Dataset):
 			self.targets_mul = np.array(self.targets_mul)
 		elif self.subordination_relation:
 			self.cla_name = ["correct", "exchange", "and"]
-			self.cla_name = ["ARO", "(,,)", ",,"]
+			# self.cla_name = ["ARO", "(,,)", ",,"]
 			self.top_2 = True
 		else:
 			self.cla_name = ["correct", "exchange"]
-		self.targets = [np.repeat(np.diag(np.ones(len(self.cla_name)))[i][None, :], len(self.dataset), axis=0)
-						for i in range(len(self.cla_name))]
 		self.image_preprocess = image_preprocess
+
+		if self.subordination_relation:
+			cor_exc = np.array([1, 0])
+			cor_exc_target = np.full((len(self.dataset), len(cor_exc)), cor_exc)
+			neg = np.array([0, 1, 0])
+			neg_target = np.full((len(self.dataset), len(neg)), neg)
+			self.targets = [cor_exc_target, neg_target, cor_exc_target]
+		else:
+			self.targets = [np.repeat(np.diag(np.ones(len(self.cla_name)))[i][None, :], len(self.dataset), axis=0)
+				for i in range(len(self.cla_name))]
 
 	def __len__(self):
 		return len(self.dataset)
@@ -110,14 +101,8 @@ class VG_Relation(Dataset):
 			true_caption = test_case["true_caption"]
 			false_caption = test_case["false_caption"]
 			caption_options = [true_caption, false_caption]
-		item = dict({"image_options": [image], "caption_options": caption_options})
+		item = dict({"image_options": image, "caption_options": caption_options})
 		return item
-
-	def download(self):
-		os.makedirs(self.root_dir, exist_ok=True)
-		image_zip_file = os.path.join(self.root_dir, "vgr_vga_images.zip")
-		subprocess.call(["gdown", "--no-cookies", "1qaPlrwhGNMrR3a11iopZUT_GPP_LrgP9", "--output", image_zip_file])
-		subprocess.call(["unzip", "vgr_vga_images.zip"], cwd=self.root_dir)
 
 	def evaluate_scores(self, scores):
 		"""
@@ -130,35 +115,36 @@ class VG_Relation(Dataset):
 			scores_t2i = scores
 			scores_i2t = scores
 
-		score = np.squeeze(scores_i2t, axis=1)
-		top_1_dict = {self.cla_name[i]: top_n_accuracy(score, self.targets[i], 1) for i in
-					  range(len(self.cla_name))}
-		if self.top_2:
-			top_2_list = {self.cla_name[i]: top_n_accuracy(score, self.targets[i], 2) for i in
-						  range(len(self.cla_name))}
-
 		result_records = []
-		# 子类别数据
-		all_relations = np.array(self.all_relations)
-		for rela in np.unique(all_relations):
-			rela_mask = (all_relations == rela)
-			score_sub = score[rela_mask]
-			if rela_mask.sum() < 25:
-				continue
-			res_dict = {
-				"Attributes": rela,
-				"Count": rela_mask.sum(),
-			}
-			for i in range(len(self.cla_name)):
-				res_dict.update(
-					{self.cla_name[i] + "_top-1": top_n_accuracy(score_sub, self.targets[i][rela_mask], 1)[0]})
-				if self.top_2:
-					res_dict.update(
-						{self.cla_name[i] + "_top-2": top_n_accuracy(score_sub, self.targets[i][rela_mask], 2)[0]})
-			result_records.append(res_dict)
 
 		# 总体数据
 		if self.multi_spatial_relation:
+			score = np.squeeze(scores_i2t, axis=1)
+			top_1_dict = {self.cla_name[i]: top_n_accuracy(score, self.targets[i], 1) for i in
+						range(len(self.cla_name))}
+			if self.top_2:
+				top_2_list = {self.cla_name[i]: top_n_accuracy(score, self.targets[i], 2) for i in
+							range(len(self.cla_name))}
+
+			# # 子类别数据
+			all_relations = np.array(self.all_relations)
+			for rela in np.unique(all_relations):
+				rela_mask = (all_relations == rela)
+				score_sub = score[rela_mask]
+				if rela_mask.sum() < 25:
+					continue
+				res_dict = {
+					"Attributes": rela,
+					"Count": rela_mask.sum(),
+				}
+				for i in range(len(self.cla_name)):
+					res_dict.update(
+						{self.cla_name[i] + "_top-1": top_n_accuracy(score_sub, self.targets[i][rela_mask], 1)[0]})
+					if self.top_2:
+						res_dict.update(
+							{self.cla_name[i] + "_top-2": top_n_accuracy(score_sub, self.targets[i][rela_mask], 2)[0]})
+				result_records.append(res_dict)
+
 			top_1 = top_n_accuracy(score, self.targets_mul, 1)
 			res_dict = {
 				"Attributes": "clasfication",
@@ -169,6 +155,9 @@ class VG_Relation(Dataset):
 			}
 			result_records.append(res_dict)
 		else:
+			score = [np.squeeze(score, axis=1) for score in scores]
+			top_1_dict = {self.cla_name[i]: top_n_accuracy(score[i], self.targets[i], 1) for i in
+						range(len(self.cla_name))}
 			for key, value in top_1_dict.items():
 				res_dict = {
 					"Attributes": key,
@@ -176,8 +165,8 @@ class VG_Relation(Dataset):
 					"Count": value[1],
 				}
 				print(key, value[0])
-				if self.top_2:
-					res_dict.update({key + "_top-2": top_2_list[key][0]})
+				# if self.top_2:
+				# 	res_dict.update({key + "_top-2": top_2_list[key][0]})
 				result_records.append(res_dict)
 		return result_records
 
