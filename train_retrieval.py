@@ -251,7 +251,10 @@ def itm_eval(scores_i2t, scores_t2i, txt2img, img2txt):
     
     for index,score in enumerate(scores_t2i):
         inds = np.argsort(score)[::-1]
-        ranks[index] = np.where(inds == txt2img[index])[0][0]
+        if txt2img[index]== -1:
+            ranks[index] = 100
+        else:
+            ranks[index] = np.where(inds == txt2img[index])[0][0]
 
     # Compute metrics
     ir1 = 100.0 * len(np.where(ranks < 1)[0]) / len(ranks)
@@ -333,7 +336,8 @@ def main(eval=False,pretrained="",dataset='coco', shuffled=False, name=""):
         image_root = '/ltstorage/home/2pan/dataset/VG_Attribution/images'
         # all_ann_root = '/ltstorage/home/2pan/dataset/Flickr/flickr_annotations_30k.csv'
         # create dataloader
-        all_dataset = clip_vg_retrieval_eval(image_root, test_retrieval_ann_root,test_vg_ann_root, preprocess)
+        all_dataset = clip_vg_retrieval_eval(image_root, test_retrieval_ann_root,test_vg_ann_root, preprocess,
+                                             sep=True, exc=True)
         test_dataloader = DataLoader(all_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False) #Define your own dataloader
         if not eval:
             train_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/train_visual_genome_attribution.json'
@@ -405,8 +409,8 @@ def main(eval=False,pretrained="",dataset='coco', shuffled=False, name=""):
 if __name__ == "__main__":
     name = 'vg_1-n_'
     # retrieval task
-    main(eval=True, pretrained="/ltstorage/home/2pan/CLIP/outputs/vg_1-n_original_checkpoint_final_r63.52_epoch20_batch128_lr1e-06_wd0.001.pth", dataset='vg', shuffled=False, name=name)
-    # main(eval=True, pretrained="/ltstorage/home/2pan/CLIP/outputs/attribute_ownership/ao_zs-sep_exc-ViT-B-32_checkpoint_final_epoch20.pth", dataset='vg', shuffled=True, name=name)
+    # main(eval=True, pretrained="/ltstorage/home/2pan/CLIP/outputs/vg_1-n_original_checkpoint_final_r63.52_epoch20_batch128_lr1e-06_wd0.001.pth", dataset='vg', shuffled=False, name=name)
+    main(eval=True, pretrained="", dataset='vg', shuffled=True, name=name)
     # main(eval=True, pretrained="outputs/shuffled_checkpoint_best_epoch5.pth", dataset='coco', shuffled=False)
 
     # Attribute Ownership task

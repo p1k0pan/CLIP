@@ -187,7 +187,8 @@ class clip_vg_retrieval_train(Dataset):
 
 class clip_vg_retrieval_eval(Dataset):
     
-    def __init__(self, image_root, ann_ret_root,ann_vg_root, preprocess, validate=False, max_words=30 ):
+    def __init__(self, image_root, ann_ret_root,ann_vg_root, preprocess, validate=False, max_words=30,
+                 sep=False, exc=False ):
 
         self.image_root = image_root
         self.preprocess = preprocess
@@ -219,6 +220,24 @@ class clip_vg_retrieval_eval(Dataset):
                 txt_id += 1
                 if validate:
                     break
+            if not validate:
+                if sep:
+                    for i, caption in enumerate(ann['separate_captions']):
+                        text = pre_caption(caption,max_words)
+                        self.text.append(text)
+                        txt = clip.tokenize(text)
+                        self.text_feat.append(txt)
+                        self.img2txt[img_id].append(txt_id)
+                        self.txt2img[txt_id] = img_id
+                        txt_id += 1
+                if exc:
+                    for i, caption in enumerate(ann['false_captions']):
+                        text = pre_caption(caption,max_words)
+                        self.text.append(text)
+                        txt = clip.tokenize(text)
+                        self.text_feat.append(txt)
+                        self.txt2img[txt_id] = -1
+                        txt_id += 1
 
     def __len__(self):
         return len(self.annotation)
