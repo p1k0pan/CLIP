@@ -9,7 +9,7 @@ from clip import model as c_model
 from torch.utils.data import DataLoader, Dataset
 import torch.nn.functional as F
 # from dataset import CLIP_COCO_dataset
-BATCH_SIZE = 64
+BATCH_SIZE = 32
 EPOCH = 20
 LR=1e-6
 WARMUP = 3000
@@ -78,19 +78,20 @@ def train(train_dataloader,val_dataloader, model, optimizer, loss_func, device, 
                 with autocast():
                     logits_per_image, logits_per_text = model(images, caption_tokenized)
                     assert logits_per_image.size(0) == images.size(0), "size not compatible"
-                    if idx !=1 :
-                        # if idx ==0: # only use true caption as positive on training
-                        #     ground_truth = torch.eye(logits_per_image.size(0),device=device)
-                        #     cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
-                        # if idx == 2: # only use split_semantic as positive on training
-                        #     ground_truth = torch.eye(logits_per_image.size(0),device=device)
-                        #     cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
-                        ground_truth = torch.eye(logits_per_image.size(0),device=device)
-                        cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
-                    else:
-                        # continue # don't use negative sample on training
-                        negative_ground_truth = torch.zeros_like(logits_per_image,device=device)
-                        cur_loss += (loss_img(logits_per_image,negative_ground_truth) + loss_txt(logits_per_text,negative_ground_truth))/2
+                    if dataset == 'composition':
+                        if idx !=1 :
+                            # if idx ==0: # only use true caption as positive on training
+                            #     ground_truth = torch.eye(logits_per_image.size(0),device=device)
+                            #     cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
+                            if idx == 2: # only use split_semantic as positive on training
+                                ground_truth = torch.eye(logits_per_image.size(0),device=device)
+                                cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
+                            # ground_truth = torch.eye(logits_per_image.size(0),device=device)
+                            # cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
+                        else:
+                            # continue # don't use negative sample on training
+                            negative_ground_truth = torch.zeros_like(logits_per_image,device=device)
+                            cur_loss += (loss_img(logits_per_image,negative_ground_truth) + loss_txt(logits_per_text,negative_ground_truth))/2
                    
                     total_loss += cur_loss
 
@@ -130,10 +131,10 @@ def train(train_dataloader,val_dataloader, model, optimizer, loss_func, device, 
                 separate_df = df[df['Attributes'] == 'and']
                 negative_df = df[df['Attributes'] == 'exchange']
                 top = correct_df['correct_top-1'].values + separate_df['and_top-1'].values - negative_df['exchange_top-1'].values
-            elif dataset == 'logic':
+            elif dataset == 'spatial':
                 correct_df = df[df['Attributes'] == 'correct']
                 negative_df = df[df['Attributes'] == 'exchange']
-                top = correct_df['correct_top-1'].values - negative_df['exchange_top-1'].values
+                top = correct_df['top-1'].values
             if top>best:
                 save_obj = {
                     'model': model.state_dict(),
@@ -216,11 +217,11 @@ def evaluation(model, data_loader, device, validate=False, dataset="composition"
                         # if idx == 0:
                         #     ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
                         #     cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
-                        # if idx == 2: # only use split_semantic as positive on training
-                        #     ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
-                        #     cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
-                        ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
-                        cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
+                        if idx == 2: # only use split_semantic as positive on training
+                            ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
+                            cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
+                        # ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
+                        # cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
                     else:
                         negative_ground_truth = torch.zeros_like(logits_per_image,device="cpu")
                         cur_loss += (loss_func(logits_per_image,negative_ground_truth) + loss_func(logits_per_text,negative_ground_truth))/2
@@ -341,7 +342,8 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
             train_dataset = snare_datasets.VG_Relation(preprocess, multi_spatial_relation=True, dataset=train_dataset)
             val_dataset = snare_datasets.VG_Relation(preprocess, multi_spatial_relation=True, dataset=val_dataset)
 
-        train_dataloader = DataLoader(train_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=True)
+        train_dataloader = DataLoader(train_dataset,batch_size = 3, num_workers=4, shuffle=True)
+        # train_dataloader = DataLoader(train_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=True)
         val_dataloader = DataLoader(val_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
         test_dataloader = DataLoader(test_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
 
@@ -422,9 +424,9 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
 
 
 if __name__ == "__main__":
-    name = 'cp_zs-2pos1neg-ViT-B-32'
+    name = 'cp_zs-and_exc-ViT-B-32'
     # retrieval task
-    main(eval=False, pretrained="", dataset='composition', name=name)
+    main(eval=False, pretrained="", dataset='spatial', name=name)
     # main(eval=True, pretrained="", dataset='ao', name=name)
 
     # Attribute Ownership task

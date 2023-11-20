@@ -80,6 +80,7 @@ class VG_Relation(Dataset):
 
 	def __getitem__(self, index):
 		test_case = self.dataset[index]
+		relation_idx = -1
 		image = Image.open(test_case["image_path"]).convert('RGB')
 		# Get the bounding box that contains the relation. This is to remove the irrelevant details in the scene.
 		image = image.crop((test_case["bbox_x"], test_case["bbox_y"], test_case["bbox_x"] + test_case["bbox_w"],
@@ -96,12 +97,21 @@ class VG_Relation(Dataset):
 			caption_options = [true_caption, false_caption, blank_rela]
 
 		elif self.multi_spatial_relation:
+			cur_relation = self.all_relations[index]
+			if cur_relation == "to the left of":
+				relation_idx = 0
+			elif cur_relation == "to the right of":
+				relation_idx = 1
+			elif cur_relation == "on":
+				relation_idx = 2
+			elif cur_relation == "below":
+				relation_idx = 3
 			caption_options = [test_case["true_caption"].replace(test_case["relation_name"], i) for i in self.cla_name]
 		else:
 			true_caption = test_case["true_caption"]
 			false_caption = test_case["false_caption"]
 			caption_options = [true_caption, false_caption]
-		item = dict({"image_options": image, "caption_options": caption_options})
+		item = dict({"image_options": image, "caption_options": caption_options, "relation": relation_idx})
 		return item
 
 	def evaluate_scores(self, scores):
