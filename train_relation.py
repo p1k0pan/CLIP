@@ -13,7 +13,7 @@ BATCH_SIZE = 32
 EPOCH = 20
 LR=1e-6
 WARMUP = 3000
-device = "cuda:7" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
+device = "cuda:0" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
 import json
 import numpy as np
 import pandas as pd
@@ -294,7 +294,8 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
         model.load_state_dict(checkpoint['model'])
 
     print("load dataset")
-    root_dir="/srv/home/2pan/SNARE/dataset/VG_Attribution"
+    root_dir="/ltstorage/home/2pan/dataset/VG_Attribution"
+    annotation_file = os.path.join(root_dir, "visual_genome_relation.json")
     train_file = os.path.join(root_dir, "train_visual_genome_relation.json")
     test_file = os.path.join(root_dir, "test_visual_genome_relation.json")
     val_file = os.path.join(root_dir, "val_visual_genome_relation.json")
@@ -305,6 +306,9 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
         image_zip_file = os.path.join(root_dir, "vgr_vga_images.zip")
         subprocess.call(["gdown", "--no-cookies", "1qaPlrwhGNMrR3a11iopZUT_GPP_LrgP9", "--output", image_zip_file])
         subprocess.call(["unzip", "vgr_vga_images.zip"], cwd=root_dir)
+
+    if not os.path.exists(annotation_file):
+        subprocess.call(["gdown", "--id", "1kX2iCHEv0CADL8dSO1nMdW-V0NqIAiP3", "--output", annotation_file])
 
     # create dataloader
     if eval:
@@ -346,6 +350,11 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
         # train_dataloader = DataLoader(train_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=True)
         val_dataloader = DataLoader(val_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
         test_dataloader = DataLoader(test_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
+
+        for batch in train_dataloader:
+            print(batch['caption_options'])
+            print(batch['relation'])
+            return
 
 
     if device == "cpu":
