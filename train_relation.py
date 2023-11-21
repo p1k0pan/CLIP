@@ -13,7 +13,7 @@ BATCH_SIZE = 32
 EPOCH = 20
 LR=1e-6
 WARMUP = 3000
-device = "cuda:0" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
+device = "cuda:7" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
 import json
 import numpy as np
 import pandas as pd
@@ -163,8 +163,6 @@ def evaluation(model, data_loader, device, validate=False, dataset="composition"
     step=0
     total_loss = 0
     scores = []
-    scores_cor_exc = []
-    scores_and_exc =[]
     for i,batch in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
     # for batch in train_dataloader :
         step+=1
@@ -175,8 +173,6 @@ def evaluation(model, data_loader, device, validate=False, dataset="composition"
         image_options.append(np.expand_dims(image_embeddings.numpy(), axis=1))
 
         caption_options = []
-        caption_cor_exc = []
-        caption_and_exc =[]
         # print(batch['caption_options'])
         """
         [('a road with a red dirt on a small moped on a man helmet',), 
@@ -198,14 +194,7 @@ def evaluation(model, data_loader, device, validate=False, dataset="composition"
             caption_embeddings = caption_embeddings / caption_embeddings.norm(dim=1, keepdim = True)
             caption_options.append(np.expand_dims(caption_embeddings.numpy(), axis=1))
             
-            if dataset == 'composition':
-                if idx == 0:
-                    caption_cor_exc.insert(0, np.expand_dims(caption_embeddings.numpy(), axis=1))
-                elif idx==1:
-                    caption_and_exc.append(np.expand_dims(caption_embeddings.numpy(), axis=1))
-                    caption_cor_exc.append(np.expand_dims(caption_embeddings.numpy(), axis=1))
-                elif idx == 2:
-                    caption_and_exc.insert(0, np.expand_dims(caption_embeddings.numpy(), axis=1))
+           
 
             # validate need calculate loss
             if validate:
@@ -237,13 +226,7 @@ def evaluation(model, data_loader, device, validate=False, dataset="composition"
         # print("caption_options", caption_options.shape)
         batch_scores = np.einsum("nkd,nld->nkl", image_options, caption_options)  # B x K x L
 
-        if dataset == 'composition':
-            caption_cor_exc = np.concatenate(caption_cor_exc, axis=1)  # B x L x D
-            batch_cor_exc_scores = np.einsum("nkd,nld->nkl", image_options, caption_cor_exc)  # B x K x L
-            scores_cor_exc.append(batch_cor_exc_scores)
-            caption_and_exc = np.concatenate(caption_and_exc, axis=1)
-            batch_and_exc_scores = np.einsum("nkd,nld->nkl", image_options, caption_and_exc)  # B x K x L
-            scores_and_exc.append(batch_and_exc_scores)
+      
         # # 例子矩阵
         # nkd = image_options
         # nld = caption_options
@@ -269,12 +252,8 @@ def evaluation(model, data_loader, device, validate=False, dataset="composition"
         wandb.log({"eval_avg_loss":total_loss/step})
     print(metric_logger.global_avg())
     all_scores = np.concatenate(scores, axis=0)  # N x K x L
-    if dataset == 'composition':
-        cor_exc_scores = np.concatenate(scores_cor_exc, axis=0)
-        and_exc_scores = np.concatenate(scores_and_exc, axis=0)
-        return [cor_exc_scores, all_scores, and_exc_scores]
-    else:
-        return all_scores
+    
+    return all_scores
 
 
 def main(eval=False,pretrained="",dataset='composition', name=""):
@@ -435,7 +414,7 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
 if __name__ == "__main__":
     name = 'cp_zs-and_exc-ViT-B-32'
     # retrieval task
-    main(eval=False, pretrained="", dataset='spatial', name=name)
+    main(eval=True, pretrained="/srv/home/2pan/CLIP/outputs/cp_zs-and_exc-ViT-B-32_checkpoint_final_epoch20.pth", dataset='composition', name=name)
     # main(eval=True, pretrained="", dataset='ao', name=name)
 
     # Attribute Ownership task

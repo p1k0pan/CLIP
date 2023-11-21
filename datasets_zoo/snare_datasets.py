@@ -65,15 +65,8 @@ class VG_Relation(Dataset):
 			self.cla_name = ["correct", "exchange"]
 		self.image_preprocess = image_preprocess
 
-		if self.subordination_relation:
-			cor_exc = np.array([1, 0])
-			cor_exc_target = np.full((len(self.dataset), len(cor_exc)), cor_exc)
-			neg = np.array([0, 1, 0])
-			neg_target = np.full((len(self.dataset), len(neg)), neg)
-			self.targets = [cor_exc_target, neg_target, cor_exc_target]
-		else:
-			self.targets = [np.repeat(np.diag(np.ones(len(self.cla_name)))[i][None, :], len(self.dataset), axis=0)
-				for i in range(len(self.cla_name))]
+		self.targets = [np.repeat(np.diag(np.ones(len(self.cla_name)))[i][None, :], len(self.dataset), axis=0)
+			for i in range(len(self.cla_name))]
 
 	def __len__(self):
 		return len(self.dataset)
@@ -126,35 +119,35 @@ class VG_Relation(Dataset):
 			scores_i2t = scores
 
 		result_records = []
+		
+		score = np.squeeze(scores_i2t, axis=1)
+		top_1_dict = {self.cla_name[i]: top_n_accuracy(score, self.targets[i], 1) for i in
+					range(len(self.cla_name))}
+		if self.top_2:
+			top_2_list = {self.cla_name[i]: top_n_accuracy(score, self.targets[i], 2) for i in
+						range(len(self.cla_name))}
 
+		result_records = []
+		# # 子类别数据
+		all_relations = np.array(self.all_relations)
+		for rela in np.unique(all_relations):
+			rela_mask = (all_relations == rela)
+			score_sub = score[rela_mask]
+			if rela_mask.sum() < 25:
+				continue
+			res_dict = {
+				"Attributes": rela,
+				"Count": rela_mask.sum(),
+			}
+			for i in range(len(self.cla_name)):
+				res_dict.update(
+					{self.cla_name[i] + "_top-1": top_n_accuracy(score_sub, self.targets[i][rela_mask], 1)[0]})
+				if self.top_2:
+					res_dict.update(
+						{self.cla_name[i] + "_top-2": top_n_accuracy(score_sub, self.targets[i][rela_mask], 2)[0]})
+			result_records.append(res_dict)
 		# 总体数据
 		if self.multi_spatial_relation:
-			score = np.squeeze(scores_i2t, axis=1)
-			top_1_dict = {self.cla_name[i]: top_n_accuracy(score, self.targets[i], 1) for i in
-						range(len(self.cla_name))}
-			if self.top_2:
-				top_2_list = {self.cla_name[i]: top_n_accuracy(score, self.targets[i], 2) for i in
-							range(len(self.cla_name))}
-
-			# # 子类别数据
-			all_relations = np.array(self.all_relations)
-			for rela in np.unique(all_relations):
-				rela_mask = (all_relations == rela)
-				score_sub = score[rela_mask]
-				if rela_mask.sum() < 25:
-					continue
-				res_dict = {
-					"Attributes": rela,
-					"Count": rela_mask.sum(),
-				}
-				for i in range(len(self.cla_name)):
-					res_dict.update(
-						{self.cla_name[i] + "_top-1": top_n_accuracy(score_sub, self.targets[i][rela_mask], 1)[0]})
-					if self.top_2:
-						res_dict.update(
-							{self.cla_name[i] + "_top-2": top_n_accuracy(score_sub, self.targets[i][rela_mask], 2)[0]})
-				result_records.append(res_dict)
-
 			top_1 = top_n_accuracy(score, self.targets_mul, 1)
 			res_dict = {
 				"Attributes": "clasfication",
@@ -165,9 +158,6 @@ class VG_Relation(Dataset):
 			}
 			result_records.append(res_dict)
 		else:
-			score = [np.squeeze(score, axis=1) for score in scores]
-			top_1_dict = {self.cla_name[i]: top_n_accuracy(score[i], self.targets[i], 1) for i in
-						range(len(self.cla_name))}
 			for key, value in top_1_dict.items():
 				res_dict = {
 					"Attributes": key,
@@ -175,8 +165,8 @@ class VG_Relation(Dataset):
 					"Count": value[1],
 				}
 				print(key, value[0])
-				# if self.top_2:
-				# 	res_dict.update({key + "_top-2": top_2_list[key][0]})
+				if self.top_2:
+					res_dict.update({key + "_top-2": top_2_list[key][0]})
 				result_records.append(res_dict)
 		return result_records
 
