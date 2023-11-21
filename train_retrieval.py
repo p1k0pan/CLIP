@@ -227,7 +227,7 @@ def evaluation(model, data_loader, device, validate=False):
     return sims_matrix.numpy(), sims_matrix.T.numpy()
 
 @torch.no_grad()
-def itm_eval(scores_i2t, scores_t2i, txt2img, img2txt):
+def itm_eval(scores_i2t, scores_t2i, txt2img, img2txt, pos_id=None):
     
     #Images->Text 
     ranks = np.zeros(scores_i2t.shape[0])
@@ -251,15 +251,15 @@ def itm_eval(scores_i2t, scores_t2i, txt2img, img2txt):
     
     for index,score in enumerate(scores_t2i):
         inds = np.argsort(score)[::-1]
-        if txt2img[index]== -1:
+        if txt2img[index] is None:
             ranks[index] = 100
         else:
             ranks[index] = np.where(inds == txt2img[index])[0][0]
 
     # Compute metrics
-    ir1 = 100.0 * len(np.where(ranks < 1)[0]) / len(ranks)
-    ir5 = 100.0 * len(np.where(ranks < 5)[0]) / len(ranks)
-    ir10 = 100.0 * len(np.where(ranks < 10)[0]) / len(ranks)        
+    ir1 = 100.0 * len(np.where(ranks < 1)[0]) / (pos_id)
+    ir5 = 100.0 * len(np.where(ranks < 5)[0]) / (pos_id)
+    ir10 = 100.0 * len(np.where(ranks < 10)[0]) / (pos_id)        
 
     tr_mean = (tr1 + tr5 + tr10) / 3
     ir_mean = (ir1 + ir5 + ir10) / 3
@@ -337,7 +337,7 @@ def main(eval=False,pretrained="",dataset='coco', shuffled=False, name=""):
         # all_ann_root = '/ltstorage/home/2pan/dataset/Flickr/flickr_annotations_30k.csv'
         # create dataloader
         all_dataset = clip_vg_retrieval_eval(image_root, test_retrieval_ann_root,test_vg_ann_root, preprocess,
-                                             sep=True, exc=True)
+                                             sep=True, exc=False)
         test_dataloader = DataLoader(all_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False) #Define your own dataloader
         if not eval:
             train_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/train_visual_genome_attribution.json'
@@ -360,7 +360,8 @@ def main(eval=False,pretrained="",dataset='coco', shuffled=False, name=""):
 
     if eval:
         score_test_i2t, score_test_t2i=evaluation(model, test_dataloader, device, False)
-        test_result = itm_eval(score_test_i2t, score_test_t2i, test_dataloader.dataset.txt2img, test_dataloader.dataset.img2txt) 
+        test_result = itm_eval(score_test_i2t, score_test_t2i, test_dataloader.dataset.txt2img, 
+                               test_dataloader.dataset.img2txt, test_dataloader.dataset.pos_id) 
         print(test_result)
     else:
         wandb.init(
@@ -409,8 +410,13 @@ def main(eval=False,pretrained="",dataset='coco', shuffled=False, name=""):
 if __name__ == "__main__":
     name = 'vg_1-n_'
     # retrieval task
-    # main(eval=True, pretrained="/ltstorage/home/2pan/CLIP/outputs/vg_1-n_original_checkpoint_final_r63.52_epoch20_batch128_lr1e-06_wd0.001.pth", dataset='vg', shuffled=False, name=name)
-    main(eval=True, pretrained="", dataset='vg', shuffled=True, name=name)
+    task = ["/ltstorage/home/2pan/CLIP/outputs/vg_1-1_original_checkpoint_final_r47.56_epoch30_batch128_lr1e-07_wd0.001.pth", "/ltstorage/home/2pan/CLIP/outputs/vg_1-1_original_checkpoint_final_r56.34_epoch20_batch128_lr1e-06_wd0.001.pth"]
+    for pretrained in task:
+        print(pretrained[-17:-12])
+
+        main(eval=True, pretrained=pretrained, dataset='vg', shuffled=False, name=name)
+    # main(eval=True, pretrained="/ltstorage/home/2pan/CLIP/outputs/vg_1-1_original_checkpoint_final_r47.56_epoch30_batch128_lr1e-07_wd0.001.pth", dataset='vg', shuffled=False, name=name)
+    # main(eval=True, pretrained="/ltstorage/home/2pan/CLIP/outputs/vg_1-1_original_checkpoint_final_r56.34_epoch20_batch128_lr1e-06_wd0.001.pth", dataset='vg', shuffled=True, name=name)
     # main(eval=True, pretrained="outputs/shuffled_checkpoint_best_epoch5.pth", dataset='coco', shuffled=False)
 
     # Attribute Ownership task
