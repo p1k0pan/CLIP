@@ -1,5 +1,11 @@
 ftfy
 regex
 tqdm
-torch
-torchvision
+# torch
+# torchvision
+wandb
+openmim # for mmcv
+easydict
+spacy
+nltk
+scikit-learn
