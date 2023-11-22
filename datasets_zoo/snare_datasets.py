@@ -133,8 +133,8 @@ class VG_Relation(Dataset):
 		for rela in np.unique(all_relations):
 			rela_mask = (all_relations == rela)
 			score_sub = score[rela_mask]
-			if rela_mask.sum() < 25:
-				continue
+			# if rela_mask.sum() < 25:
+			# 	continue
 			res_dict = {
 				"Attributes": rela,
 				"Count": rela_mask.sum(),
@@ -150,7 +150,7 @@ class VG_Relation(Dataset):
 		if self.multi_spatial_relation:
 			top_1 = top_n_accuracy(score, self.targets_mul, 1)
 			res_dict = {
-				"Attributes": "clasfication",
+				"Attributes": "classification",
 				"top-1": top_1[0],
 				"top-2": top_n_accuracy(score, self.targets_mul, 2)[0],
 				"top-3": top_n_accuracy(score, self.targets_mul, 3)[0],

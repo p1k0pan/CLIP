@@ -1,4 +1,4 @@
-# from attr import attrib
+from attr import attrib
 import torch
 from torch import nn, optim
 import argparse
@@ -13,7 +13,7 @@ BATCH_SIZE = 128
 EPOCH = 20
 LR=1e-6
 WARMUP = 3000
-device = "cuda:3" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
+device = "cuda:0" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
 import json
 import numpy as np
 import pandas as pd
@@ -35,7 +35,7 @@ def convert_models_to_fp32(model,eval):
             p.grad.data = p.grad.data.float() 
 
 def train(train_dataloader,val_dataloader, model, optimizer, loss_func, device, total_epoch, init_lr, 
-          scheduler=None, scaler = None, name="", val_dataset=None, dataset="composition"):
+          scheduler=None, scaler = None, name="", val_dataset=None, dataset="ao"):
     model.train()
     loss_img = loss_func
     loss_txt = loss_func
@@ -60,7 +60,7 @@ def train(train_dataloader,val_dataloader, model, optimizer, loss_func, device, 
         # for batch in train_dataloader :
             optimizer.zero_grad()
             step+=1
-            relation = batch['relation'] 
+            
             # images: torch.Size([128, 3, 224, 224]) captions: torch.Size([128, 1, 77])
             images = batch["image_options"]
             images= images.to(device)
@@ -78,28 +78,19 @@ def train(train_dataloader,val_dataloader, model, optimizer, loss_func, device, 
                 with autocast():
                     logits_per_image, logits_per_text = model(images, caption_tokenized)
                     assert logits_per_image.size(0) == images.size(0), "size not compatible"
-                    if dataset == 'composition':
-                        if idx !=1 :
-                            # if idx ==0: # only use true caption as positive on training
-                            #     ground_truth = torch.eye(logits_per_image.size(0),device=device)
-                            #     cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
-                            if idx == 2: # only use split_semantic as positive on training
-                                ground_truth = torch.eye(logits_per_image.size(0),device=device)
-                                cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
-                            # ground_truth = torch.eye(logits_per_image.size(0),device=device)
-                            # cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
-                        else:
-                            # continue # don't use negative sample on training
-                            negative_ground_truth = torch.zeros_like(logits_per_image,device=device)
-                            cur_loss += (loss_img(logits_per_image,negative_ground_truth) + loss_txt(logits_per_text,negative_ground_truth))/2
-                    elif dataset == "spatial":
-                        if idx == 0 or idx == 1:
-                            ground_truth = torch.zeros_like(logits_per_image,device=device)
-                            for rel in range(len(relation)):
-                                if relation[rel] == idx:
-                                    ground_truth[rel,rel] = 1
-                            cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
-
+                    if idx !=1 :
+                        # if idx ==0: # only use true caption as positive on training
+                        #     ground_truth = torch.eye(logits_per_image.size(0),device=device)
+                        #     cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
+                        # if idx == 2: # only use split_semantic as positive on training
+                        #     ground_truth = torch.eye(logits_per_image.size(0),device=device)
+                        #     cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
+                        ground_truth = torch.eye(logits_per_image.size(0),device=device)
+                        cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
+                    else:
+                        # continue # don't use negative sample on training
+                        negative_ground_truth = torch.zeros_like(logits_per_image,device=device)
+                        cur_loss += (loss_img(logits_per_image,negative_ground_truth) + loss_txt(logits_per_text,negative_ground_truth))/2
                    
                     total_loss += cur_loss
 
@@ -129,19 +120,19 @@ def train(train_dataloader,val_dataloader, model, optimizer, loss_func, device, 
 
         # _=evaluation(model, val_dataloader, device, True)
         convert_models_to_fp32(model, True)
-        all_scores=evaluation(model, val_dataloader, device, True, dataset)
+        all_scores=evaluation(model, val_dataloader, device, True)
         c_model.convert_weights(model)
         if val_dataset is not None:
             val_result = val_dataset.evaluate_scores(all_scores)
             df = pd.DataFrame(val_result)
-            if dataset == 'composition':
+            if dataset == 'ao':
                 correct_df = df[df['Attributes'] == 'correct']
-                separate_df = df[df['Attributes'] == 'and']
-                negative_df = df[df['Attributes'] == 'exchange']
-                top = correct_df['correct_top-1'].values + separate_df['and_top-1'].values - negative_df['exchange_top-1'].values
-            elif dataset == 'spatial':
-                correct_df = df[df['Attributes'] == 'classification']
-                top = correct_df['top-1'].values
+                separate_df = df[df['Attributes'] == 'separate']
+                top = correct_df['correct_top-1'].values + separate_df['separate_top-1'].values
+            elif dataset == 'logic':
+                correct_df = df[df['Attributes'] == 'correct']
+                negative_df = df[df['Attributes'] == 'negative']
+                top = correct_df['correct_top-1'].values - negative_df['negative_top-1'].values
             if top>best:
                 save_obj = {
                     'model': model.state_dict(),
@@ -158,7 +149,7 @@ def train(train_dataloader,val_dataloader, model, optimizer, loss_func, device, 
     print('Training time {}'.format(total_time_str)) 
 
 @torch.no_grad()
-def evaluation(model, data_loader, device, validate=False, dataset="composition"):
+def evaluation(model, data_loader, device, validate=False):
     model.eval()
 
     print('Computing features for evaluation...')
@@ -180,7 +171,6 @@ def evaluation(model, data_loader, device, validate=False, dataset="composition"
         image_options.append(np.expand_dims(image_embeddings.numpy(), axis=1))
 
         caption_options = []
-        relation = batch['relation']
         # print(batch['caption_options'])
         """
         [('a road with a red dirt on a small moped on a man helmet',), 
@@ -208,28 +198,19 @@ def evaluation(model, data_loader, device, validate=False, dataset="composition"
                 logits_per_text = logits_per_image.T
                 loss_func = nn.CrossEntropyLoss()
                 with autocast():
-                    if dataset == "composition":
-                        if idx != 1:
-                            # if idx == 0:
-                            #     ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
-                            #     cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
-                            if idx == 2: # only use split_semantic as positive on training
-                                ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
-                                cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
-                            # ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
-                            # cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
-                        else:
-                            negative_ground_truth = torch.zeros_like(logits_per_image,device="cpu")
-                            cur_loss += (loss_func(logits_per_image,negative_ground_truth) + loss_func(logits_per_text,negative_ground_truth))/2
-                            # continue
-                    elif dataset == "spatial":
-                        if idx == 0 or idx == 1:
-                            ground_truth = torch.zeros_like(logits_per_image,device="cpu")
-                            for rel in range(len(relation)):
-                                if relation[rel] == idx:
-                                    ground_truth[rel,rel] = 1
+                    if idx != 1:
+                        # if idx == 0:
+                        #     ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
+                        #     cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
+                        if idx == 2: # only use split_semantic as positive on training
+                            ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
                             cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
-
+                        # ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
+                        # cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
+                    else:
+                        negative_ground_truth = torch.zeros_like(logits_per_image,device="cpu")
+                        cur_loss += (loss_func(logits_per_image,negative_ground_truth) + loss_func(logits_per_text,negative_ground_truth))/2
+                        # continue
 
                     total_loss += cur_loss
                 wandb.log({"eval_loss":cur_loss})
@@ -241,7 +222,6 @@ def evaluation(model, data_loader, device, validate=False, dataset="composition"
         # print("caption_options", caption_options.shape)
         batch_scores = np.einsum("nkd,nld->nkl", image_options, caption_options)  # B x K x L
 
-      
         # # 例子矩阵
         # nkd = image_options
         # nld = caption_options
@@ -267,14 +247,12 @@ def evaluation(model, data_loader, device, validate=False, dataset="composition"
         wandb.log({"eval_avg_loss":total_loss/step})
     print(metric_logger.global_avg())
     all_scores = np.concatenate(scores, axis=0)  # N x K x L
-    
     return all_scores
 
 
-def main(eval=False,pretrained="",dataset='composition', name=""):
+def main(eval=False,pretrained="",dataset='ao', name=""):
     
     model, preprocess = clip.load("ViT-B/32",device=device,jit=False) #Must set jit=False for training
-    print(device)
     if pretrained != "":
         # model, preprocess = clip.load("ViT-L/14",device=device,jit=False) #Must set jit=False for training
         print("loading pretrained model")
@@ -289,10 +267,10 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
 
     print("load dataset")
     root_dir="/ltstorage/home/2pan/dataset/VG_Attribution"
-    annotation_file = os.path.join(root_dir, "visual_genome_relation.json")
-    train_file = os.path.join(root_dir, "train_visual_genome_relation.json")
-    test_file = os.path.join(root_dir, "test_visual_genome_relation.json")
-    val_file = os.path.join(root_dir, "val_visual_genome_relation.json")
+    annotation_file = os.path.join(root_dir, "visual_genome_attribution.json")
+    train_file = os.path.join(root_dir, "train_visual_genome_attribution.json")
+    test_file = os.path.join(root_dir, "test_visual_genome_attribution.json")
+    val_file = os.path.join(root_dir, "val_visual_genome_attribution.json")
     image_dir = os.path.join(root_dir, "images")
     if not os.path.exists(image_dir):
         print("Image Directory for VG_Attribution could not be found!")
@@ -302,8 +280,7 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
         subprocess.call(["unzip", "vgr_vga_images.zip"], cwd=root_dir)
 
     if not os.path.exists(annotation_file):
-        subprocess.call(["gdown", "--id", "1kX2iCHEv0CADL8dSO1nMdW-V0NqIAiP3", "--output", annotation_file])
-
+        subprocess.call(["gdown", "--id", "13tWvOrNOLHxl3Rm9cR3geAdHx2qR3-Tw", "--output", annotation_file])
     # create dataloader
     if eval:
         with open(test_file, "r") as f:
@@ -312,10 +289,10 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
         for item in test_dataset:
             item["image_path"] = os.path.join(image_dir, item["image_path"])
 
-        if dataset == "composition":
-            test_dataset = snare_datasets.VG_Relation(preprocess, subordination_relation=True, dataset=test_dataset)
-        elif dataset == "spatial":
-            test_dataset = snare_datasets.VG_Relation(preprocess, multi_spatial_relation=True, dataset=test_dataset)
+        if dataset == "ao":
+            test_dataset = snare_datasets.VG_Attribution(preprocess, attribute_ownership=True, dataset=test_dataset)
+        elif dataset == "logic":
+            test_dataset = snare_datasets.VG_Attribution(preprocess, logic=True, dataset=test_dataset)
         test_dataloader = DataLoader(test_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
     else:
         with open(train_file, "r") as f:
@@ -331,17 +308,15 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
             for item in val_dataset:
                 item["image_path"] = os.path.join(image_dir, item["image_path"])
 
-        if dataset == 'composition':
-            test_dataset = snare_datasets.VG_Relation(preprocess, subordination_relation=True, dataset=test_dataset)
-            train_dataset = snare_datasets.VG_Relation(preprocess, subordination_relation=True, dataset=train_dataset)
-            val_dataset = snare_datasets.VG_Relation(preprocess, subordination_relation=True, dataset=val_dataset)
-        elif dataset == 'spatial':
-            test_dataset = snare_datasets.VG_Relation(preprocess, multi_spatial_relation=True, dataset=test_dataset)
-            train_dataset = snare_datasets.VG_Relation(preprocess, multi_spatial_relation=True, dataset=train_dataset)
-            val_dataset = snare_datasets.VG_Relation(preprocess, multi_spatial_relation=True, dataset=val_dataset)
-
+        if dataset == 'ao':
+            train_dataset = snare_datasets.VG_Attribution(preprocess, attribute_ownership=True, dataset=train_dataset)
+            val_dataset = snare_datasets.VG_Attribution(preprocess, attribute_ownership=True, dataset=val_dataset)
+            test_dataset = snare_datasets.VG_Attribution(preprocess, attribute_ownership=True, dataset=test_dataset)
+        elif dataset == 'logic':
+            train_dataset = snare_datasets.VG_Attribution(preprocess, logic=True, dataset=train_dataset)
+            val_dataset = snare_datasets.VG_Attribution(preprocess, logic=True, dataset=val_dataset)
+            test_dataset = snare_datasets.VG_Attribution(preprocess, logic=True, dataset=test_dataset)
         train_dataloader = DataLoader(train_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=True)
-        # train_dataloader = DataLoader(train_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=True)
         val_dataloader = DataLoader(val_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
         test_dataloader = DataLoader(test_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
 
@@ -352,32 +327,28 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
         c_model.convert_weights(model) # Actually this line is unnecessary since clip by default already on float16
 
     if eval:
-        # print("below",test_dataset.all_relations.count('below')) # 20
-        # print("left",test_dataset.all_relations.count('to the left of')) # 695
-        # print("right",test_dataset.all_relations.count('to the right of')) # 695
-        # print("on",test_dataset.all_relations.count('on')) #158
         convert_models_to_fp32(model, True)
         # print(test_dataset.all_attributes)
-        all_scores=evaluation(model, test_dataloader, device, False, dataset)
+        all_scores=evaluation(model, test_dataloader, device, False)
         if test_dataset is not None:
             test_result = test_dataset.evaluate_scores(all_scores)
             for record in test_result:
                 record.update({"Model": "clip", "Dataset": dataset, "name": name})
             print(test_result)
-            output_file = os.path.join("outputs/", f"eval_{name}.csv")
+            output_file = os.path.join("outputs/", f"{dataset}_clip_name-{name}_epoch-{EPOCH}_lr-{LR}_batch-{BATCH_SIZE}.csv")
             df = pd.DataFrame(test_result)
 
-            print(f"Saving results to {output_file}")
-            if os.path.exists(output_file):
-                all_df = pd.read_csv(output_file, index_col=0)
-                all_df = pd.concat([all_df, df])
-                all_df.to_csv(output_file)
-            else:
-                df.to_csv(output_file)
+            # print(f"Saving results to {output_file}")
+            # if os.path.exists(output_file):
+            #     all_df = pd.read_csv(output_file, index_col=0)
+            #     all_df = pd.concat([all_df, df])
+            #     all_df.to_csv(output_file)
+            # else:
+            #     df.to_csv(output_file)
     else:
         wandb.init(
         # set the wandb project where this run will be logged
-        project="vg_relation",
+        project="finetune_clip_vg",
         name= name,
         
         # track hyperparameters and run metadata
@@ -398,12 +369,12 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
             init_lr = LR, scaler=scaler, scheduler=scheduler, name=name, val_dataset=val_dataset, dataset = dataset)
 
         convert_models_to_fp32(model, True)
-        all_scores=evaluation(model, test_dataloader, device, False, dataset)
+        all_scores=evaluation(model, test_dataloader, device, True)
         if test_dataset is not None:
             test_result = test_dataset.evaluate_scores(all_scores)
             for record in test_result:
                 record.update({"Model": "clip", "Dataset": dataset, "name": name})
-            output_file = os.path.join("outputs/", f"{dataset}_clip_{name}_epoch-{EPOCH}_lr-{LR}_batch-{BATCH_SIZE}.csv")
+            output_file = os.path.join("outputs/", f"{dataset}_clip_name-{name}_epoch-{EPOCH}_lr-{LR}_batch-{BATCH_SIZE}.csv")
 
             df = pd.DataFrame(test_result)
             # correct_df = df[df['Attributes'] == 'correct']
@@ -426,20 +397,12 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
 
 
 if __name__ == "__main__":
-    name = 'sp_zs-left_right-ViT-B-32'
+    name = 'ao_ft-2pos1neg-ViT-B-32'
     # retrieval task
-    main(eval=False, pretrained="", dataset='spatial', name=name)
-    # main(eval=True, pretrained="/ltstorage/home/2pan/CLIP/outputs/vg_1-1_original_checkpoint_final_r56.34_epoch20_batch128_lr1e-06_wd0.001.pth", dataset='composition', name=name)
+    main(eval=True, pretrained="/ltstorage/home/2pan/CLIP/outputs/vg_1-1_original_checkpoint_final_r47.56_epoch30_batch128_lr1e-07_wd0.001.pth", dataset='ao', name=name)
+    # main(eval=True, pretrained="", dataset='ao', name=name)
 
-    # with open("/ltstorage/home/2pan/dataset/VG_Attribution/visual_genome_relation.json") as f:
-    #     data = json.load(f)
-    # all_relations=[]
-    # for item in data:
-    #     all_relations.append(item["relation_name"])
+    # Attribute Ownership task
 
-    # print("below",all_relations.count('below')) #209
-    # print("left",all_relations.count('to the left of')) # 7741
-    # print("right",all_relations.count('to the right of')) # 7741
-    # print("on",all_relations.count('on')) # 1684
     
     
