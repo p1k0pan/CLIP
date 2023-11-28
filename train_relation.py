@@ -13,7 +13,7 @@ BATCH_SIZE = 128
 EPOCH = 20
 LR=1e-6
 WARMUP = 3000
-device = "cuda:3" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
+device = "cuda:0" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
 import json
 import numpy as np
 import pandas as pd
@@ -71,6 +71,8 @@ def train(train_dataloader,val_dataloader, model, optimizer, loss_func, device, 
             # batch['caption_options'][2][0]: the man and the phone are happy and orange respectively
             caption_options = batch["caption_options"] #[true_caption, false_caption, split_semantic]
             cur_loss = 0
+            positive_loss = 0
+            negative_loss = 0
             for idx in range(len(caption_options)):
                 caption = caption_options[idx]
                 caption_tokenized = torch.cat([clip.tokenize(c) for c in caption]).to(device)
@@ -79,26 +81,39 @@ def train(train_dataloader,val_dataloader, model, optimizer, loss_func, device, 
                     logits_per_image, logits_per_text = model(images, caption_tokenized)
                     assert logits_per_image.size(0) == images.size(0), "size not compatible"
                     if dataset == 'composition':
-                        if idx !=1 :
-                            # if idx ==0: # only use true caption as positive on training
-                            #     ground_truth = torch.eye(logits_per_image.size(0),device=device)
-                            #     cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
-                            if idx == 2: # only use split_semantic as positive on training
-                                ground_truth = torch.eye(logits_per_image.size(0),device=device)
-                                cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
-                            # ground_truth = torch.eye(logits_per_image.size(0),device=device)
-                            # cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
+                        # if idx !=1 :
+                        #     # if idx ==0: # only use true caption as positive on training
+                        #     #     ground_truth = torch.eye(logits_per_image.size(0),device=device)
+                        #     #     cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
+                        #     # if idx == 2: # only use split_semantic as positive on training
+                        #     #     ground_truth = torch.eye(logits_per_image.size(0),device=device)
+                        #     #     cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
+                        #     ground_truth = torch.eye(logits_per_image.size(0),device=device)
+                        #     cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
+                        # else:
+                        #     # continue # don't use negative sample on training
+                        #     negative_ground_truth = torch.zeros_like(logits_per_image,device=device)
+                        #     cur_loss += (loss_img(logits_per_image,negative_ground_truth) + loss_txt(logits_per_text,negative_ground_truth))/2
+                        if idx ==0 :
+                            ground_truth = torch.eye(logits_per_image.size(0),device=device)
+                            positive_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
                         else:
+                            # if idx == 1:
+                            #     negative_ground_truth = torch.zeros_like(logits_per_image,device=device)
+                            #     cur_loss += (loss_img(logits_per_image,negative_ground_truth) + loss_txt(logits_per_text,negative_ground_truth))/2
                             # continue # don't use negative sample on training
                             negative_ground_truth = torch.zeros_like(logits_per_image,device=device)
-                            cur_loss += (loss_img(logits_per_image,negative_ground_truth) + loss_txt(logits_per_text,negative_ground_truth))/2
+                            negative_loss += (loss_img(logits_per_image,negative_ground_truth) + loss_txt(logits_per_text,negative_ground_truth))/2
+                        cur_loss = positive_loss + negative_loss 
                     elif dataset == "spatial":
-                        if idx == 0 or idx == 1:
-                            ground_truth = torch.zeros_like(logits_per_image,device=device)
-                            for rel in range(len(relation)):
-                                if relation[rel] == idx:
-                                    ground_truth[rel,rel] = 1
-                            cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
+                        # if idx == 0 or idx == 1: # only left or right
+                        # ground_truth = torch.zeros_like(logits_per_image,device=device)
+                        # for rel in range(len(relation)):
+                        #     if relation[rel] == idx:
+                        #         ground_truth[rel,rel] = 1
+
+                        ground_truth = torch.eye(logits_per_image.size(0),device=device) # only true caption as positive on training
+                        cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
 
                    
                     total_loss += cur_loss
@@ -142,6 +157,7 @@ def train(train_dataloader,val_dataloader, model, optimizer, loss_func, device, 
             elif dataset == 'spatial':
                 correct_df = df[df['Attributes'] == 'classification']
                 top = correct_df['top-1'].values
+            wandb.log({'top1-acc': top})
             if top>best:
                 save_obj = {
                     'model': model.state_dict(),
@@ -190,7 +206,6 @@ def evaluation(model, data_loader, device, validate=False, dataset="composition"
         "A man with a red helmet on a small moped on a dirt road. ", 
         
         """
-        cur_loss = 0
         for idx in range(len(batch["caption_options"])):
             caption_tokenized = torch.cat([clip.tokenize(c) for c in batch["caption_options"][idx]])
             caption_embeddings = model.encode_text(caption_tokenized.to(device)).cpu()  # B x D
@@ -207,28 +222,43 @@ def evaluation(model, data_loader, device, validate=False, dataset="composition"
                 logits_per_image = image_embeddings @ caption_embeddings.t()
                 logits_per_text = logits_per_image.T
                 loss_func = nn.CrossEntropyLoss()
+                cur_loss = 0
+                positive_loss = 0
+                negative_loss = 0
                 with autocast():
                     if dataset == "composition":
-                        if idx != 1:
-                            # if idx == 0:
-                            #     ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
-                            #     cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
-                            if idx == 2: # only use split_semantic as positive on training
-                                ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
-                                cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
-                            # ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
-                            # cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
+                        # if idx != 1:
+                        #     # if idx == 0:
+                        #     #     ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
+                        #     #     cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
+                        #     # if idx == 2: # only use split_semantic as positive on training
+                        #     #     ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
+                        #     #     cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
+                        #     ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
+                        #     cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
+                        # else:
+                        #     negative_ground_truth = torch.zeros_like(logits_per_image,device="cpu")
+                        #     cur_loss += (loss_func(logits_per_image,negative_ground_truth) + loss_func(logits_per_text,negative_ground_truth))/2
+                        #     # continue
+                        if idx == 0:
+                            ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
+                            positive_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
                         else:
+                            # if idx == 1:
+                            #     negative_ground_truth = torch.zeros_like(logits_per_image,device="cpu")
+                            #     cur_loss += (loss_func(logits_per_image,negative_ground_truth) + loss_func(logits_per_text,negative_ground_truth))/2
                             negative_ground_truth = torch.zeros_like(logits_per_image,device="cpu")
-                            cur_loss += (loss_func(logits_per_image,negative_ground_truth) + loss_func(logits_per_text,negative_ground_truth))/2
+                            negative_loss += (loss_func(logits_per_image,negative_ground_truth) + loss_func(logits_per_text,negative_ground_truth))/2
+                        cur_loss = positive_loss + negative_loss 
                             # continue
                     elif dataset == "spatial":
-                        if idx == 0 or idx == 1:
-                            ground_truth = torch.zeros_like(logits_per_image,device="cpu")
-                            for rel in range(len(relation)):
-                                if relation[rel] == idx:
-                                    ground_truth[rel,rel] = 1
-                            cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
+                        # if idx == 0 or idx == 1:
+                        #     ground_truth = torch.zeros_like(logits_per_image,device="cpu")
+                        #     for rel in range(len(relation)):
+                        #         if relation[rel] == idx:
+                        #             ground_truth[rel,rel] = 1
+                        ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
+                        cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
 
 
                     total_loss += cur_loss
@@ -279,6 +309,7 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
         # model, preprocess = clip.load("ViT-L/14",device=device,jit=False) #Must set jit=False for training
         print("loading pretrained model")
         checkpoint = torch.load(pretrained)
+        # checkpoint = torch.load(pretrained,map_location=device)
 
         # Use these 3 lines if you use default model setting(not training setting) of the clip. For example, if you set context_length to 100 since your string is very long during training, then assign 100 to checkpoint['model_state_dict']["context_length"] 
         # checkpoint['model_state_dict']["input_resolution"] = model.input_resolution #default is 224
@@ -401,6 +432,7 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
         all_scores=evaluation(model, test_dataloader, device, False, dataset)
         if test_dataset is not None:
             test_result = test_dataset.evaluate_scores(all_scores)
+            print(test_result)
             for record in test_result:
                 record.update({"Model": "clip", "Dataset": dataset, "name": name})
             output_file = os.path.join("outputs/", f"{dataset}_clip_{name}_epoch-{EPOCH}_lr-{LR}_batch-{BATCH_SIZE}.csv")
@@ -426,10 +458,10 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
 
 
 if __name__ == "__main__":
-    name = 'sp_zs-left_right-ViT-B-32'
+    name = 'sp_zs-pos-ViT-B-32'
     # retrieval task
+    # main(eval=False, pretrained="", dataset='composition', name=name)
     main(eval=False, pretrained="", dataset='spatial', name=name)
-    # main(eval=True, pretrained="/ltstorage/home/2pan/CLIP/outputs/vg_1-1_original_checkpoint_final_r56.34_epoch20_batch128_lr1e-06_wd0.001.pth", dataset='composition', name=name)
 
     # with open("/ltstorage/home/2pan/dataset/VG_Attribution/visual_genome_relation.json") as f:
     #     data = json.load(f)

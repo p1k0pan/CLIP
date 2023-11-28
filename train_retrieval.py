@@ -15,7 +15,7 @@ EPOCH = 20
 LR=1e-6
 WARMUP = 3000
 WD = 0.001
-device = "cuda:1" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
+device = "cuda:0" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
 import json
 import re
 from torchvision import transforms
@@ -282,7 +282,7 @@ def main(eval=False,pretrained="",dataset='coco', shuffled=False, name=""):
     if pretrained != "":
         # model, preprocess = clip.load("ViT-L/14",device=device,jit=False) #Must set jit=False for training
         print("loading pretrained model")
-        checkpoint = torch.load(pretrained)
+        checkpoint = torch.load(pretrained,map_location=device)
 
         # Use these 3 lines if you use default model setting(not training setting) of the clip. For example, if you set context_length to 100 since your string is very long during training, then assign 100 to checkpoint['model_state_dict']["context_length"] 
         # checkpoint['model_state_dict']["input_resolution"] = model.input_resolution #default is 224
@@ -322,11 +322,11 @@ def main(eval=False,pretrained="",dataset='coco', shuffled=False, name=""):
                 train_dataloader = DataLoader(train_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=True) #Define your own dataloader
 
     elif dataset == 'flickr':
-        test_ann_root = '/ltstorage/home/2pan/dataset/Flickr/test_flickr.csv'
+        test_ann_root = '/ltstorage/home/2pan/dataset/Flickr/flickr30k_test.json'
         image_root = '/ltstorage/home/2pan/dataset/Flickr/flickr30k-images'
         # all_ann_root = '/ltstorage/home/2pan/dataset/Flickr/flickr_annotations_30k.csv'
         # create dataloader
-        all_dataset = flickr_dataset(image_root, test_ann_root, preprocess)
+        all_dataset = clip_coco_retrieval_eval(image_root, test_ann_root, preprocess)
         dataset_len = len(all_dataset)
         test_dataloader = DataLoader(all_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False) #Define your own dataloader
     
@@ -337,7 +337,7 @@ def main(eval=False,pretrained="",dataset='coco', shuffled=False, name=""):
         # all_ann_root = '/ltstorage/home/2pan/dataset/Flickr/flickr_annotations_30k.csv'
         # create dataloader
         all_dataset = clip_vg_retrieval_eval(image_root, test_retrieval_ann_root,test_vg_ann_root, preprocess,
-                                             sep=True, exc=False)
+                                             sep=False, exc=True)
         test_dataloader = DataLoader(all_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False) #Define your own dataloader
         if not eval:
             train_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/train_visual_genome_attribution.json'
@@ -352,6 +352,71 @@ def main(eval=False,pretrained="",dataset='coco', shuffled=False, name=""):
             val_dataset = clip_vg_retrieval_eval(image_root, val_retrieval_ann_root,val_vg_ann_root, preprocess)
             val_dataloader = DataLoader(val_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
 
+    elif dataset == "neglog":
+        test_vg_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/test_visual_genome_attribution.json'
+        test_retrieval_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/test_retrieval_neglog_VG_attribution.json'
+        image_root = '/ltstorage/home/2pan/dataset/VG_Attribution/images'
+        # all_ann_root = '/ltstorage/home/2pan/dataset/Flickr/flickr_annotations_30k.csv'
+        # create dataloader
+        all_dataset = clip_vg_retrieval_eval(image_root, test_retrieval_ann_root,test_vg_ann_root, preprocess,
+                                             sep=False, exc=False)
+        test_dataloader = DataLoader(all_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False) #Define your own dataloader
+        if not eval:
+            train_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/train_visual_genome_attribution.json'
+            # train_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/train_retrieval_VG_attribution.json'
+            # create dataloader
+            train_dataset = clip_vg_retrieval_train(image_root, train_ann_root, preprocess)
+            dataset_len = len(train_dataset)
+            train_dataloader = DataLoader(train_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=True) #Define your own dataloader
+
+            val_retrieval_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/val_retrieval_VG_attribution.json'
+            val_vg_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/val_visual_genome_attribution.json'
+            val_dataset = clip_vg_retrieval_eval(image_root, val_retrieval_ann_root,val_vg_ann_root, preprocess)
+            val_dataloader = DataLoader(val_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
+
+    elif dataset == "composition":
+        test_vg_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/test_visual_genome_relation.json'
+        test_retrieval_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/test_retrieval_cp_VG_relation.json'
+        image_root = '/ltstorage/home/2pan/dataset/VG_Attribution/images'
+        # all_ann_root = '/ltstorage/home/2pan/dataset/Flickr/flickr_annotations_30k.csv'
+        # create dataloader
+        all_dataset = clip_vg_retrieval_eval(image_root, test_retrieval_ann_root,test_vg_ann_root, preprocess,
+                                             sep=True, exc=True)
+        test_dataloader = DataLoader(all_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False) #Define your own dataloader
+        if not eval:
+            train_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/train_visual_genome_relation.json'
+            # train_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/train_retrieval_VG_attribution.json'
+            # create dataloader
+            train_dataset = clip_vg_retrieval_train(image_root, train_ann_root, preprocess)
+            dataset_len = len(train_dataset)
+            train_dataloader = DataLoader(train_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=True) #Define your own dataloader
+
+            val_retrieval_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/val_retrieval_cp_VG_relation.json'
+            val_vg_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/val_visual_genome_relation.json'
+            val_dataset = clip_vg_retrieval_eval(image_root, val_retrieval_ann_root,val_vg_ann_root, preprocess)
+            val_dataloader = DataLoader(val_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
+
+    elif dataset == "spatial":
+        test_vg_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/test_visual_genome_relation.json'
+        test_retrieval_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/test_retrieval_sp_VG_relation.json'
+        image_root = '/ltstorage/home/2pan/dataset/VG_Attribution/images'
+        # all_ann_root = '/ltstorage/home/2pan/dataset/Flickr/flickr_annotations_30k.csv'
+        # create dataloader
+        all_dataset = clip_vg_retrieval_eval(image_root, test_retrieval_ann_root,test_vg_ann_root, preprocess,
+                                             sep=False, exc=True) # only true or false
+        test_dataloader = DataLoader(all_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False) #Define your own dataloader
+        if not eval:
+            train_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/train_visual_genome_relation.json'
+            # train_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/train_retrieval_VG_attribution.json'
+            # create dataloader
+            train_dataset = clip_vg_retrieval_train(image_root, train_ann_root, preprocess)
+            dataset_len = len(train_dataset)
+            train_dataloader = DataLoader(train_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=True) #Define your own dataloader
+
+            val_retrieval_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/val_retrieval_sp_VG_relation.json'
+            val_vg_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/val_visual_genome_relation.json'
+            val_dataset = clip_vg_retrieval_eval(image_root, val_retrieval_ann_root,val_vg_ann_root, preprocess)
+            val_dataloader = DataLoader(val_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
 
     if device == "cpu":
         model.float()
@@ -410,12 +475,23 @@ def main(eval=False,pretrained="",dataset='coco', shuffled=False, name=""):
 if __name__ == "__main__":
     name = 'vg_1-n_'
     # retrieval task
-    task = ["/ltstorage/home/2pan/CLIP/outputs/vg_1-1_original_checkpoint_final_r47.56_epoch30_batch128_lr1e-07_wd0.001.pth", "/ltstorage/home/2pan/CLIP/outputs/vg_1-1_original_checkpoint_final_r56.34_epoch20_batch128_lr1e-06_wd0.001.pth"]
+    # task = ["","/ltstorage/home/2pan/CLIP/outputs/composition/cp_zs-2pos1neg-ViT-B-32_checkpoint_final_epoch20.pth",
+    #          "/ltstorage/home/2pan/CLIP/outputs/composition/cp_zs-2pos-ViT-B-32_checkpoint_final_epoch20.pth",
+    #          "/ltstorage/home/2pan/CLIP/outputs/composition/cp_zs-cor_exc-ViT-B-32_checkpoint_final_epoch20.pth",
+    #          "/ltstorage/home/2pan/CLIP/outputs/composition/cp_zs-and_exc-ViT-B-32_checkpoint_final_epoch20.pth",
+    #          "/ltstorage/home/2pan/CLIP/outputs/composition/cp_zs-cor-ViT-B-32_checkpoint_final_epoch20.pth"]
+    # task = ["",
+    #         "/ltstorage/home/2pan/CLIP/outputs/spatial/sp_zs-4rel-ViT-B-32_checkpoint_final_epoch20.pth",
+    #         "/ltstorage/home/2pan/CLIP/outputs/spatial/sp_zs-left_right-ViT-B-32_checkpoint_final_epoch20.pth"]
+    task = ["",
+            "/ltstorage/home/2pan/CLIP/outputs/img_retrieval/original_checkpoint_final_r72.35_epoch20.pth",
+            "/ltstorage/home/2pan/CLIP/outputs/img_retrieval/img2txt_shuffled_checkpoint_final_r72.35_epoch20.pth",
+            "/ltstorage/home/2pan/CLIP/outputs/img_retrieval/2neg_shuffled_checkpoint_final_r72.43_epoch20.pth"]
     for pretrained in task:
-        print(pretrained[-17:-12])
+        print(pretrained)
 
-        main(eval=True, pretrained=pretrained, dataset='vg', shuffled=False, name=name)
-    # main(eval=True, pretrained="/ltstorage/home/2pan/CLIP/outputs/vg_1-1_original_checkpoint_final_r47.56_epoch30_batch128_lr1e-07_wd0.001.pth", dataset='vg', shuffled=False, name=name)
+        main(eval=True, pretrained=pretrained, dataset='flickr', shuffled=False, name=name)
+    # main(eval=True, pretrained="/ltstorage/home/2pan/CLIP/outputs/composition/cp_zs-cor_none-ViT-B-32_checkpoint_final_epoch20.pth", dataset='composition', shuffled=False, name=name)
     # main(eval=True, pretrained="/ltstorage/home/2pan/CLIP/outputs/vg_1-1_original_checkpoint_final_r56.34_epoch20_batch128_lr1e-06_wd0.001.pth", dataset='vg', shuffled=True, name=name)
     # main(eval=True, pretrained="outputs/shuffled_checkpoint_best_epoch5.pth", dataset='coco', shuffled=False)
 

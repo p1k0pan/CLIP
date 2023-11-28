@@ -1,3 +1,4 @@
+from cgi import test
 import os
 import json
 import subprocess
@@ -60,7 +61,7 @@ class VG_Relation(Dataset):
 		elif self.subordination_relation:
 			self.cla_name = ["correct", "exchange", "and"]
 			# self.cla_name = ["ARO", "(,,)", ",,"]
-			self.top_2 = True
+			# self.top_2 = True
 		else:
 			self.cla_name = ["correct", "exchange"]
 		self.image_preprocess = image_preprocess
@@ -99,7 +100,8 @@ class VG_Relation(Dataset):
 				relation_idx = 2
 			elif cur_relation == "below":
 				relation_idx = 3
-			caption_options = [test_case["true_caption"].replace(test_case["relation_name"], i) for i in self.cla_name]
+			# caption_options = [test_case["true_caption"].replace(test_case["relation_name"], i) for i in self.cla_name]
+			caption_options = [test_case["true_caption"]]
 		else:
 			true_caption = test_case["true_caption"]
 			false_caption = test_case["false_caption"]
@@ -133,8 +135,8 @@ class VG_Relation(Dataset):
 		for rela in np.unique(all_relations):
 			rela_mask = (all_relations == rela)
 			score_sub = score[rela_mask]
-			# if rela_mask.sum() < 25:
-			# 	continue
+			if rela_mask.sum() < 25:
+				continue
 			res_dict = {
 				"Attributes": rela,
 				"Count": rela_mask.sum(),
@@ -164,7 +166,6 @@ class VG_Relation(Dataset):
 					key + "_top-1": value[0],
 					"Count": value[1],
 				}
-				print(key, value[0])
 				if self.top_2:
 					res_dict.update({key + "_top-2": top_2_list[key][0]})
 				result_records.append(res_dict)
