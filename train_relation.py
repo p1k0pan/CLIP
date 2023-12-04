@@ -13,7 +13,7 @@ BATCH_SIZE = 128
 EPOCH = 20
 LR=1e-6
 WARMUP = 3000
-device = "cuda:0" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
+device = "cuda:2" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
 import json
 import numpy as np
 import pandas as pd
@@ -107,12 +107,12 @@ def train(train_dataloader,val_dataloader, model, optimizer, loss_func, device, 
                         cur_loss = positive_loss + negative_loss 
                     elif dataset == "spatial":
                         # if idx == 0 or idx == 1: # only left or right
-                        # ground_truth = torch.zeros_like(logits_per_image,device=device)
-                        # for rel in range(len(relation)):
-                        #     if relation[rel] == idx:
-                        #         ground_truth[rel,rel] = 1
+                        ground_truth = torch.zeros_like(logits_per_image,device=device)
+                        for rel in range(len(relation)):
+                            if relation[rel] == idx:
+                                ground_truth[rel,rel] = 1
 
-                        ground_truth = torch.eye(logits_per_image.size(0),device=device) # only true caption as positive on training
+                        # ground_truth = torch.eye(logits_per_image.size(0),device=device) # only true caption as positive on training
                         cur_loss += (loss_img(logits_per_image,ground_truth) + loss_txt(logits_per_text,ground_truth))/2
 
                    
@@ -253,11 +253,11 @@ def evaluation(model, data_loader, device, validate=False, dataset="composition"
                             # continue
                     elif dataset == "spatial":
                         # if idx == 0 or idx == 1:
-                        #     ground_truth = torch.zeros_like(logits_per_image,device="cpu")
-                        #     for rel in range(len(relation)):
-                        #         if relation[rel] == idx:
-                        #             ground_truth[rel,rel] = 1
-                        ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
+                        ground_truth = torch.zeros_like(logits_per_image,device="cpu")
+                        for rel in range(len(relation)):
+                            if relation[rel] == idx:
+                                ground_truth[rel,rel] = 1
+                        # ground_truth = torch.eye(logits_per_image.size(0),device="cpu")
                         cur_loss += (loss_func(logits_per_image,ground_truth) + loss_func(logits_per_text,ground_truth))/2
 
 
@@ -319,21 +319,27 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
         model.load_state_dict(checkpoint['model'])
 
     print("load dataset")
-    root_dir="/ltstorage/home/2pan/dataset/VG_Attribution"
-    annotation_file = os.path.join(root_dir, "visual_genome_relation.json")
-    train_file = os.path.join(root_dir, "train_visual_genome_relation.json")
-    test_file = os.path.join(root_dir, "test_visual_genome_relation.json")
-    val_file = os.path.join(root_dir, "val_visual_genome_relation.json")
-    image_dir = os.path.join(root_dir, "images")
-    if not os.path.exists(image_dir):
-        print("Image Directory for VG_Attribution could not be found!")
-        os.makedirs(root_dir, exist_ok=True)
-        image_zip_file = os.path.join(root_dir, "vgr_vga_images.zip")
-        subprocess.call(["gdown", "--no-cookies", "1qaPlrwhGNMrR3a11iopZUT_GPP_LrgP9", "--output", image_zip_file])
-        subprocess.call(["unzip", "vgr_vga_images.zip"], cwd=root_dir)
+    # root_dir="/ltstorage/home/2pan/dataset/VG_Attribution"
+    # annotation_file = os.path.join(root_dir, "visual_genome_relation.json")
+    # train_file = os.path.join(root_dir, "train_visual_genome_relation.json")
+    # test_file = os.path.join(root_dir, "test_visual_genome_relation.json")
+    # val_file = os.path.join(root_dir, "val_visual_genome_relation.json")
+    # image_dir = os.path.join(root_dir, "images")
+    # if not os.path.exists(image_dir):
+    #     print("Image Directory for VG_Attribution could not be found!")
+    #     os.makedirs(root_dir, exist_ok=True)
+    #     image_zip_file = os.path.join(root_dir, "vgr_vga_images.zip")
+    #     subprocess.call(["gdown", "--no-cookies", "1qaPlrwhGNMrR3a11iopZUT_GPP_LrgP9", "--output", image_zip_file])
+    #     subprocess.call(["unzip", "vgr_vga_images.zip"], cwd=root_dir)
 
-    if not os.path.exists(annotation_file):
-        subprocess.call(["gdown", "--id", "1kX2iCHEv0CADL8dSO1nMdW-V0NqIAiP3", "--output", annotation_file])
+    # if not os.path.exists(annotation_file):
+    #     subprocess.call(["gdown", "--id", "1kX2iCHEv0CADL8dSO1nMdW-V0NqIAiP3", "--output", annotation_file])
+
+    root_dir="/ltstorage/home/2pan/dataset/gvqa"
+    train_file = os.path.join(root_dir, "gvqa/seed0/spatial_relation_train.json")
+    test_file = os.path.join(root_dir, "gvqa/seed0/spatial_relation_test.json")
+    val_file = os.path.join(root_dir, "gvqa/seed0/spatial_relation_val.json")
+    image_dir = os.path.join(root_dir, "images")
 
     # create dataloader
     if eval:
@@ -341,7 +347,8 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
             test_dataset = json.load(f)
 
         for item in test_dataset:
-            item["image_path"] = os.path.join(image_dir, item["image_path"])
+            # item["image_path"] = os.path.join(image_dir, item["image_path"])
+            item["image_path"] = os.path.join(image_dir, item["image_id"])
 
         if dataset == "composition":
             test_dataset = snare_datasets.VG_Relation(preprocess, subordination_relation=True, dataset=test_dataset)
@@ -352,21 +359,29 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
         with open(train_file, "r") as f:
             train_dataset = json.load(f)
             for item in train_dataset:
-                item["image_path"] = os.path.join(image_dir, item["image_path"])
+                # item["image_path"] = os.path.join(image_dir, item["image_path"])
+                item["image_path"] = os.path.join(image_dir, item["image_id"])
         with open(test_file, "r") as f:
             test_dataset = json.load(f)
             for item in test_dataset:
-                item["image_path"] = os.path.join(image_dir, item["image_path"])
+                # item["image_path"] = os.path.join(image_dir, item["image_path"])
+                item["image_path"] = os.path.join(image_dir, item["image_id"])
         with open(val_file, "r") as f:
             val_dataset = json.load(f)
             for item in val_dataset:
-                item["image_path"] = os.path.join(image_dir, item["image_path"])
+                # item["image_path"] = os.path.join(image_dir, item["image_path"])
+                item["image_path"] = os.path.join(image_dir, item["image_id"])
 
         if dataset == 'composition':
             test_dataset = snare_datasets.VG_Relation(preprocess, subordination_relation=True, dataset=test_dataset)
             train_dataset = snare_datasets.VG_Relation(preprocess, subordination_relation=True, dataset=train_dataset)
             val_dataset = snare_datasets.VG_Relation(preprocess, subordination_relation=True, dataset=val_dataset)
         elif dataset == 'spatial':
+            root_dir="/ltstorage/home/2pan/dataset/gvqa"
+            train_file = os.path.join(root_dir, "gvqa/seed0/spatial_relation_train.json")
+            test_file = os.path.join(root_dir, "gvqa/seed0/spatial_relation_test.json")
+            val_file = os.path.join(root_dir, "gvqa/seed0/spatial_relation_val.json")
+            image_dir = os.path.join(root_dir, "images")
             test_dataset = snare_datasets.VG_Relation(preprocess, multi_spatial_relation=True, dataset=test_dataset)
             train_dataset = snare_datasets.VG_Relation(preprocess, multi_spatial_relation=True, dataset=train_dataset)
             val_dataset = snare_datasets.VG_Relation(preprocess, multi_spatial_relation=True, dataset=val_dataset)
@@ -376,6 +391,11 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
         val_dataloader = DataLoader(val_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
         test_dataloader = DataLoader(test_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
 
+    # for batch in test_dataloader:
+    #     for idx in range(len(batch['caption_options'])):
+    #         print(idx)
+    #         print(batch['caption_options'][idx])
+    #     return
 
     if device == "cpu":
         model.float()
@@ -383,6 +403,7 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
         c_model.convert_weights(model) # Actually this line is unnecessary since clip by default already on float16
 
     if eval:
+        print("evaluating dataset", root_dir)
         # print("below",test_dataset.all_relations.count('below')) # 20
         # print("left",test_dataset.all_relations.count('to the left of')) # 695
         # print("right",test_dataset.all_relations.count('to the right of')) # 695
@@ -398,13 +419,13 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
             output_file = os.path.join("outputs/", f"eval_{name}.csv")
             df = pd.DataFrame(test_result)
 
-            print(f"Saving results to {output_file}")
-            if os.path.exists(output_file):
-                all_df = pd.read_csv(output_file, index_col=0)
-                all_df = pd.concat([all_df, df])
-                all_df.to_csv(output_file)
-            else:
-                df.to_csv(output_file)
+            # print(f"Saving results to {output_file}")
+            # if os.path.exists(output_file):
+            #     all_df = pd.read_csv(output_file, index_col=0)
+            #     all_df = pd.concat([all_df, df])
+            #     all_df.to_csv(output_file)
+            # else:
+            #     df.to_csv(output_file)
     else:
         wandb.init(
         # set the wandb project where this run will be logged
@@ -458,9 +479,9 @@ def main(eval=False,pretrained="",dataset='composition', name=""):
 
 
 if __name__ == "__main__":
-    name = 'sp_zs-pos-ViT-B-32'
+    name = 'sp_zs-4rel-ViT-B-32'
     # retrieval task
-    # main(eval=False, pretrained="", dataset='composition', name=name)
+    # main(eval=True, pretrained="", dataset='composition', name=name)
     main(eval=False, pretrained="", dataset='spatial', name=name)
 
     # with open("/ltstorage/home/2pan/dataset/VG_Attribution/visual_genome_relation.json") as f:

@@ -15,7 +15,6 @@ from .data_des import Text_Des
 from .retrieval_dataset import pre_caption
 from collections import Counter
 from .utils import top_n_accuracy
-from sklearn.model_selection import train_test_split
 
 
 class VG_Relation(Dataset):
@@ -77,8 +76,15 @@ class VG_Relation(Dataset):
 		relation_idx = -1
 		image = Image.open(test_case["image_path"]).convert('RGB')
 		# Get the bounding box that contains the relation. This is to remove the irrelevant details in the scene.
-		image = image.crop((test_case["bbox_x"], test_case["bbox_y"], test_case["bbox_x"] + test_case["bbox_w"],
-							test_case["bbox_y"] + test_case["bbox_h"]))
+		# image = image.crop((test_case["bbox_x"], test_case["bbox_y"], test_case["bbox_x"] + test_case["bbox_w"],
+		# 					test_case["bbox_y"] + test_case["bbox_h"]))
+		bbox_subject = test_case['subject']['bbox']
+		bbox_object = test_case['object']['bbox']
+		bbox_x = min(bbox_subject[2], bbox_object[2])
+		bbox_y = min(bbox_subject[0], bbox_object[0])
+		bbox_w = max(bbox_subject[3], bbox_object[3])
+		bbox_h = max(bbox_subject[1], bbox_object[1])
+		image = image.crop((bbox_x, bbox_y, bbox_w, bbox_h))
 
 		if self.image_preprocess is not None:
 			image = self.image_preprocess(image)
@@ -100,8 +106,8 @@ class VG_Relation(Dataset):
 				relation_idx = 2
 			elif cur_relation == "below":
 				relation_idx = 3
-			# caption_options = [test_case["true_caption"].replace(test_case["relation_name"], i) for i in self.cla_name]
-			caption_options = [test_case["true_caption"]]
+			caption_options = [test_case["true_caption"].replace(test_case["relation_name"], i) for i in self.cla_name]
+			# caption_options = [test_case["true_caption"]]
 		else:
 			true_caption = test_case["true_caption"]
 			false_caption = test_case["false_caption"]

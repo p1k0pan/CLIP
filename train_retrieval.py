@@ -483,15 +483,15 @@ if __name__ == "__main__":
     # task = ["",
     #         "/ltstorage/home/2pan/CLIP/outputs/spatial/sp_zs-4rel-ViT-B-32_checkpoint_final_epoch20.pth",
     #         "/ltstorage/home/2pan/CLIP/outputs/spatial/sp_zs-left_right-ViT-B-32_checkpoint_final_epoch20.pth"]
-    task = ["",
-            "/ltstorage/home/2pan/CLIP/outputs/img_retrieval/original_checkpoint_final_r72.35_epoch20.pth",
-            "/ltstorage/home/2pan/CLIP/outputs/img_retrieval/img2txt_shuffled_checkpoint_final_r72.35_epoch20.pth",
-            "/ltstorage/home/2pan/CLIP/outputs/img_retrieval/2neg_shuffled_checkpoint_final_r72.43_epoch20.pth"]
-    for pretrained in task:
-        print(pretrained)
+    # task = ["",
+    #         "/ltstorage/home/2pan/CLIP/outputs/img_retrieval/original_checkpoint_final_r72.35_epoch20.pth",
+    #         "/ltstorage/home/2pan/CLIP/outputs/img_retrieval/img2txt_shuffled_checkpoint_final_r72.35_epoch20.pth",
+    #         "/ltstorage/home/2pan/CLIP/outputs/img_retrieval/2neg_shuffled_checkpoint_final_r72.43_epoch20.pth"]
+    # for pretrained in task:
+    #     print(pretrained)
 
-        main(eval=True, pretrained=pretrained, dataset='flickr', shuffled=False, name=name)
-    # main(eval=True, pretrained="/ltstorage/home/2pan/CLIP/outputs/composition/cp_zs-cor_none-ViT-B-32_checkpoint_final_epoch20.pth", dataset='composition', shuffled=False, name=name)
+    #     main(eval=True, pretrained=pretrained, dataset='flickr', shuffled=False, name=name)
+    main(eval=True, pretrained="/ltstorage/home/2pan/CLIP/outputs/sp_zs-pos-ViT-B-32_checkpoint_final_epoch20.pth", dataset='spatial', shuffled=False, name=name)
     # main(eval=True, pretrained="/ltstorage/home/2pan/CLIP/outputs/vg_1-1_original_checkpoint_final_r56.34_epoch20_batch128_lr1e-06_wd0.001.pth", dataset='vg', shuffled=True, name=name)
     # main(eval=True, pretrained="outputs/shuffled_checkpoint_best_epoch5.pth", dataset='coco', shuffled=False)
 
