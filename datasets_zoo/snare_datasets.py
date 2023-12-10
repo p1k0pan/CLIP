@@ -16,6 +16,7 @@ from .retrieval_dataset import pre_caption
 from collections import Counter
 from .utils import top_n_accuracy
 
+from clip import clip
 
 class VG_Relation(Dataset):
 	def __init__(self, image_preprocess, subordination_relation=False, multi_spatial_relation=False, dataset=None,
@@ -37,9 +38,10 @@ class VG_Relation(Dataset):
 		self.dataset_ = list()
 		self.all_relations_ = list()
 		self.targets_mul = list()
-		relations = ["to the left of", "to the right of", "on", "below"] \
-			if self.multi_spatial_relation else ["near", "next to", "beside", "on the side of", "surrounding",
-												 "close to", "standing beside", "with", "by"]
+		rel_list = json.load(open("/ltstorage/home/2pan/dataset/gvqa/gvqa/seed0/predicates.json", 'r'))
+		# relations = ["to the left of", "to the right of", "on", "below"] \
+		# 	if self.multi_spatial_relation else None
+		relations = rel_list
 		for item in self.dataset:
 			if (item["relation_name"] in relations) and self.multi_spatial_relation:
 				self.dataset_.append(item)
@@ -51,7 +53,7 @@ class VG_Relation(Dataset):
 
 		if self.multi_spatial_relation:
 			self.cla_name = relations
-			self.top_2 = True
+			# self.top_2 = True
 			for i in self.all_relations:
 				label = np.zeros(len(relations))
 				label[relations.index(i)] = 1
@@ -107,12 +109,12 @@ class VG_Relation(Dataset):
 			elif cur_relation == "below":
 				relation_idx = 3
 			caption_options = [test_case["true_caption"].replace(test_case["relation_name"], i) for i in self.cla_name]
-			# caption_options = [test_case["true_caption"]]
+			# caption_options = test_case["true_caption"]
 		else:
 			true_caption = test_case["true_caption"]
 			false_caption = test_case["false_caption"]
 			caption_options = [true_caption, false_caption]
-		item = dict({"image_options": image, "caption_options": caption_options, "relation": relation_idx})
+		item = dict({"image_options": image, "caption_options": caption_options, "relation": relation_idx, 'true_caption': clip.tokenize(test_case["true_caption"])})
 		return item
 
 	def evaluate_scores(self, scores):

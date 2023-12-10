@@ -15,7 +15,7 @@ EPOCH = 20
 LR=1e-6
 WARMUP = 3000
 WD = 0.001
-device = "cuda:0" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
+device = "cuda:1" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
 import json
 import re
 from torchvision import transforms
@@ -397,13 +397,16 @@ def main(eval=False,pretrained="",dataset='coco', shuffled=False, name=""):
             val_dataloader = DataLoader(val_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False)
 
     elif dataset == "spatial":
-        test_vg_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/test_visual_genome_relation.json'
-        test_retrieval_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/test_retrieval_sp_VG_relation.json'
-        image_root = '/ltstorage/home/2pan/dataset/VG_Attribution/images'
+        # test_vg_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/test_visual_genome_relation.json'
+        # test_retrieval_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/test_retrieval_sp_VG_relation.json'
+        # image_root = '/ltstorage/home/2pan/dataset/VG_Attribution/images'
+        test_vg_ann_root = '/ltstorage/home/2pan/dataset/gvqa/gvqa/seed0/spatial_relation_test.json'
+        image_root = '/ltstorage/home/2pan/dataset/gvqa/images'
+        test_retrieval_ann_root = '/ltstorage/home/2pan/dataset/gvqa/gvqa/seed0/spatial_retrieval_test.json'
         # all_ann_root = '/ltstorage/home/2pan/dataset/Flickr/flickr_annotations_30k.csv'
         # create dataloader
         all_dataset = clip_vg_retrieval_eval(image_root, test_retrieval_ann_root,test_vg_ann_root, preprocess,
-                                             sep=False, exc=True) # only true or false
+                                             sep=False, exc=False) # only true or false
         test_dataloader = DataLoader(all_dataset,batch_size = BATCH_SIZE, num_workers=4, shuffle=False) #Define your own dataloader
         if not eval:
             train_ann_root = '/ltstorage/home/2pan/dataset/VG_Attribution/train_visual_genome_relation.json'
@@ -491,7 +494,7 @@ if __name__ == "__main__":
     #     print(pretrained)
 
     #     main(eval=True, pretrained=pretrained, dataset='flickr', shuffled=False, name=name)
-    main(eval=True, pretrained="/ltstorage/home/2pan/CLIP/outputs/sp_zs-pos-ViT-B-32_checkpoint_final_epoch20.pth", dataset='spatial', shuffled=False, name=name)
+    main(eval=True, pretrained="", dataset='spatial', shuffled=False, name=name)
     # main(eval=True, pretrained="/ltstorage/home/2pan/CLIP/outputs/vg_1-1_original_checkpoint_final_r56.34_epoch20_batch128_lr1e-06_wd0.001.pth", dataset='vg', shuffled=True, name=name)
     # main(eval=True, pretrained="outputs/shuffled_checkpoint_best_epoch5.pth", dataset='coco', shuffled=False)
 

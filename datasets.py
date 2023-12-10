@@ -208,7 +208,8 @@ class clip_vg_retrieval_eval(Dataset):
         txt_id = 0
         for img_id, ann in enumerate(self.annotation):
             self.image.append(ann['image_id'])
-            img_path = os.path.join(self.image_root,ann['image_id']+'.jpg')      
+            # img_path = os.path.join(self.image_root,ann['image_id']+'.jpg')      
+            img_path = os.path.join(self.image_root,ann['image_id'])      
             img = self.preprocess(Image.open(img_path).convert('RGB'))
             self.image_feat.append(img)
             self.img2txt[img_id] = []
