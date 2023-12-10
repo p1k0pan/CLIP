@@ -1,8 +1,8 @@
 ftfy
 regex
 tqdm
-# torch
-# torchvision
+torch==2.0.1 # for cuda=11.7
+torchvision==0.15.2 # for cuda=11.7
 wandb
 openmim # for mmcv
 easydict
